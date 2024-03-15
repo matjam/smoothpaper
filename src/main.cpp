@@ -55,6 +55,16 @@ int main(int argc, char **argv) {
   sf::Sprite  current_wallpaper_sprite;
   sf::Sprite  next_wallpaper_sprite;
 
+  // a black texture and sprite to use behind the next wallpaper sprite when we are fading
+  // in the next wallpaper.
+  sf::Image black_image;
+  black_image.create(1, 1, sf::Color::Black);
+
+  sf::Texture black_texture;
+  black_texture.loadFromImage(black_image);
+
+  sf::Sprite black_sprite(black_texture);
+
   spdlog::info(
       "starting smoothpaper v{}.{}.{} ...", SMOOTHPAPER_VERSION_MAJOR, SMOOTHPAPER_VERSION_MINOR,
       SMOOTHPAPER_VERSION_PATCH);
@@ -81,6 +91,10 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+  // set the black sprite to the size of the render window and make it fully transparent
+  black_sprite.setScale(static_cast<float>(render_window->getSize().x), static_cast<float>(render_window->getSize().y));
+  black_sprite.setColor(sf::Color(0, 0, 0, 0));
+
   // take the first wallpaper in the deque and set it as the next wallpaper, then put
   // it at the back of the deque.
 
@@ -98,6 +112,7 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
   next_wallpaper_texture.loadFromImage(next_wallpaper_image);
+  next_wallpaper_texture.generateMipmap();
   next_wallpaper_sprite.setTexture(next_wallpaper_texture, true);
   spdlog::debug("scaling first wallpaper sprite to fit render window");
   scale(render_window, &next_wallpaper_sprite, config.get_scale_mode());
@@ -131,6 +146,9 @@ int main(int argc, char **argv) {
 
     // if we are fading in the next wallpaper, we draw it. Otherwise, we don't.
     if (fading_in) {
+      black_sprite.setColor(sf::Color(0, 0, 0, static_cast<sf::Uint8>(alpha)));
+      render_window->draw(black_sprite);
+      next_wallpaper_sprite.setColor(sf::Color(255, 255, 255, static_cast<sf::Uint8>(alpha)));
       render_window->draw(next_wallpaper_sprite);
       alpha += config.get_fade_speed();
 
@@ -148,11 +166,13 @@ int main(int argc, char **argv) {
         // current wallpaper sprite.
 
         current_wallpaper_texture.loadFromImage(next_wallpaper_image);
+        current_wallpaper_texture.generateMipmap();
         current_wallpaper_sprite.setTexture(current_wallpaper_texture, true); // should not be necessary
         spdlog::debug("scaling current wallpaper sprite to fit render window");
         scale(render_window, &current_wallpaper_sprite, config.get_scale_mode());
         current_wallpaper_sprite.setColor(sf::Color(255, 255, 255, 255)); // fully opaque
         next_wallpaper_sprite.setColor(sf::Color(255, 255, 255, 0));      // fully transparent
+        black_sprite.setColor(sf::Color(0, 0, 0, 0));                     // fully transparent
 
         time_until_next_wallpaper = sf::seconds(config.get_delay_seconds());
 
@@ -193,22 +213,13 @@ int main(int argc, char **argv) {
           return EXIT_FAILURE;
         }
         next_wallpaper_texture.loadFromImage(next_wallpaper_image);
+        next_wallpaper_texture.generateMipmap();
         next_wallpaper_sprite.setTexture(next_wallpaper_texture, true);
         spdlog::debug("scaling next wallpaper sprite to fit render window");
         scale(render_window, &next_wallpaper_sprite, config.get_scale_mode());
       } else {
         time_until_next_wallpaper -= clock.restart();
       }
-    }
-
-    // if the next wallpaper sprite has a nonzero alpha, we should render it.
-    if (alpha > 0.0f) {
-      if (alpha > 255.0f) {
-        alpha = 255.0f;
-      }
-
-      next_wallpaper_sprite.setColor(sf::Color(255, 255, 255, static_cast<sf::Uint8>(alpha)));
-      render_window->draw(next_wallpaper_sprite);
     }
 
     if (!fading_in && time_until_next_wallpaper.asSeconds() > 0) {
