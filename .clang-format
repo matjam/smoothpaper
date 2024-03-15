@@ -1,0 +1,8 @@
+---
+Language: Cpp
+ColumnLimit: 120
+BasedOnStyle:  LLVM
+AlignAfterOpenBracket: AlwaysBreak
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+BreaksBeforeBraces: Attach

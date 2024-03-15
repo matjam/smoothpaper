@@ -1,0 +1,22 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 23,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "GCC 13.2.1 x86_64-pc-linux-gnu",
+      "description": "Using compilers: C = /sbin/gcc, CXX = /sbin/g++",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/${presetName}",
+        "CMAKE_CXX_COMPILER": "/sbin/g++",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ]
+}
