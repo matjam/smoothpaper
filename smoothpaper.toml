@@ -1,0 +1,40 @@
+# smoothpaper configuration file
+
+# path your wallpapers are stored in
+wallpapers = "~/Pictures"
+
+# whether the files should be shuffled or not. If you do not shuffle, the files will be 
+# displayed in the order they are found which is dependent on the filesystem.
+shuffle = true
+
+# the mode to scale the images. Options are
+#
+#   "vertical": scales the image to fit vertically; on widescreens this might result in
+#               bars on the side if the wallpaper has a less wide aspect ratio. On other
+#               displays this might mean cropping the sides if the wallpaper has a wider
+#               aspect ratio than the screen.
+#
+# "horizontal": scales the image to fit horizintally; on widescreens this might result in
+#               cropping the top and bottom of the image. On a 4:3 or 16:9 screen this might
+#               result in bars on the top and bottom if the aspect ratio of the wallpaper
+#               is wider than your screen.
+#
+#  "stretched": will stretch the image in both directions to fit your screen. This means
+#               that if the image does not match your screen's aspect ratio, it will be
+#               distorted.
+scale_mode = "vertical"
+
+# the speed at which the images fade in and out, in seconds. This may be fractional.
+fade_speed = 1.0
+
+# the delay between images, in seconds. Must be an integer.
+delay = 5
+
+# SFML's window redraw framerate limit. This is the maximum number of frames per second 
+# the window will redraw at. Higher numbers will be smoother, but will use more CPU during
+# fade in of a new wallpaper. smoothpaper sleeps between transitions so should not use any
+# CPU when idle.
+framerate_limit = 60
+
+# whether to display debug information or not.
+debug = false
