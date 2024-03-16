@@ -20,12 +20,14 @@
 #include <filesystem>
 #include <random>
 #include <string>
+#include <sys/stat.h>
 
 #include <SFML/Graphics.hpp>
 #include <SFML/Window.hpp>
 #include <cxxopts.hpp>
 #include <fmt/color.h>
 #include <fmt/format.h>
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/spdlog.h>
 
 #include "Config.hpp"
@@ -37,6 +39,7 @@ int main(int argc, char **argv) {
   cxxopts::Options options("smoothpaper", "Wallpaper changer with smooth transitions for X11 Window Managers.");
 
   options.add_options()                                                                   //
+      ("b,background", "Run as a daemon", cxxopts::value<bool>()->default_value("false")) //
       ("d,debug", "Enable debug logging", cxxopts::value<bool>()->default_value("false")) //
       ("h,help", "Print usage")                                                           //
       ("v,version", "Print version")                                                      //
@@ -58,10 +61,50 @@ int main(int argc, char **argv) {
         fmt::styled("by", fg(fmt::color::lawn_green)),                //
         fmt::styled("Nathan Ollerenshaw", fg(fmt::color::indian_red)) //
     );
-
     return EXIT_SUCCESS;
   }
 
+  if (args["background"].as<bool>()) {
+    pid_t pid = fork();
+    if (pid > 0) {
+      return EXIT_SUCCESS;
+    } else if (pid < 0) {
+      spdlog::error("Error: couldn't fork");
+      return EXIT_FAILURE;
+    }
+
+    umask(0022);
+
+    // logs need to go to a file if we are running as a daemon
+    auto log_dest_dir = fmt::format("{}/.local/share/smoothpaper", std::getenv("HOME"));
+    std::filesystem::create_directories(log_dest_dir);
+    auto log_dest_file = fmt::format("{}/smoothpaper.log", log_dest_dir);
+    auto rotating_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(log_dest_file, 1048576, 3);
+    auto logger        = std::make_shared<spdlog::logger>("smoothpaper", rotating_sink);
+    logger->flush_on(spdlog::level::debug);
+    spdlog::set_default_logger(logger);
+
+    pid_t sid = setsid();
+    if (sid < 0) {
+      spdlog::error("Error: couldn't setsid");
+      return EXIT_FAILURE;
+    }
+
+    if ((chdir("/")) < 0) {
+      spdlog::error("Error: couldn't chdir");
+      return EXIT_FAILURE;
+    }
+
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+  }
+
+  spdlog::info(
+      "starting smoothpaper v{}.{}.{} ...", SMOOTHPAPER_VERSION_MAJOR, SMOOTHPAPER_VERSION_MINOR,
+      SMOOTHPAPER_VERSION_PATCH);
+
+  // set up the various variables we need to keep track of the current and next wallpapers
   std::string current_wallpaper;
   std::string next_wallpaper;
   sf::Image   current_wallpaper_image;
@@ -80,10 +123,6 @@ int main(int argc, char **argv) {
   black_texture.loadFromImage(black_image);
 
   sf::Sprite black_sprite(black_texture);
-
-  spdlog::info(
-      "starting smoothpaper v{}.{}.{} ...", SMOOTHPAPER_VERSION_MAJOR, SMOOTHPAPER_VERSION_MINOR,
-      SMOOTHPAPER_VERSION_PATCH);
 
   Config config(args);
 

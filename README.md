@@ -4,13 +4,15 @@ Smoothly transitioning wallpaper daemon for X11 Window Mangers.
 
 https://github.com/matjam/smoothpaper/assets/578676/152657d8-e321-4aa9-8e3c-8d3c2eb1fcad
 
-Smoothpaper is designed to work only with X11 Window Managers and currently can't set the desktop wallpaper of any DE that sets its own wallpaper (like Gnome, KDE, etc).
+Smoothpaper is a SFML based wallpaper slideshow daemon designed to work with  X11 Window Managers, such as Qtile, i3, Openbox, etc.
+
+It currently can't set the desktop wallpaper of any DE that sets its own wallpaper (like Gnome, KDE, etc).
 
 Its been tested with Qtile, i3, and Openbox, but should work with any X11 WM that doesn't manage the desktop wallpaper.
 
-The main use-case for this program is to have a smooth transition between wallpapers on a multi-monitor setup. I was using feh and nitrogen to set wallpapers, but the transitions were jarring and not smooth. I wanted a smooth transition between wallpapers and couldn't find a program that did this, so I wrote one.
+In my travels from Windows/Mac to using tiling window managers on Linux, I was frustrated with the lack of any way to have a set of wallpapers that transition smoothly while I work. I was using feh and nitrogen to set wallpapers, but the transitions were jarring. I wanted smooth fading between the wallpapers, and couldn't find a program that did this for X11 (I am aware there are programs that do this for Wayland), so I wrote one.
 
-You _can_ use xscreensaver's glslideshow to transition between wallpapers, but it's not as smooth as smoothpaper and doesn't have the same features.
+You _can_ use xscreensaver's glslideshow to transition between wallpapers, but it's not as smooth as smoothpaper. 
 
 Because I'm using SFML to do the transitions, I can use a Texture that is stored on the GPU and the transitions are done by changing the alpha value of the texture, so the transitions are very smooth and use very little CPU.
 
@@ -24,10 +26,10 @@ Because I'm using SFML to do the transitions, I can use a Texture that is stored
 - Set the speed of fade transitions
 - Uses SFML for smooth transitions
 - Uses very little CPU when idle
+- Can be run as a daemon with the `-b` flag
 
 ### TODO
 
-- Can be run as a daemon
 - Dynamically change the wallpappers directory (currently you have to restart the program to change the directory
 - Set a specific wallpaper immediately via command line without waiting for the next transition
 
@@ -62,11 +64,11 @@ I use cmake to build the project. You can build it with the following commands:
 ```bash
 mkdir build
 cd build
-cmake .. -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
+cmake .. -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release
 make
 ```
 
-This will output the `smoothpaper` binary in the `build/` directory. 
+This will output the `smoothpaper` binary in the `build/RELEASE` directory. 
 
 ## Installation
 
@@ -78,7 +80,13 @@ Copy the `smoothpaper.toml` file to `~/.config/smoothpaper/smoothpaper.toml` and
 
 Simply run the `smoothpaper` binary. It will read the configuration file and set the wallpaper for the first screen it finds. It will then transition to the next wallpaper after the delay specified in the configuration file.
 
-It currently logs to stdout and does not daemonize, so you'll need to run it in the background or use a program like `nohup` to run it in the background.
+Smoothpaper supports daemonizing with the `-b` flag. This will run the program in the background and will not print any output to the terminal. Logs will be written to `~/.local/share/smoothpaper/smoothpaper.log`, and will be rotated when the log file reaches 1MB in size, with 3 backups.
+
+```bash
+smoothpaper -b
+```
+
+
 
 ## Configuration
 

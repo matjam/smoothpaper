@@ -9,7 +9,14 @@ project(smoothpaper
 
 configure_file(src/Version.hpp.in src/Version.hpp)
 
-add_compile_options(-O3 -Wall -Wextra -Wpedantic -Werror)
+
+string(TOLOWER ${CMAKE_BUILD_TYPE} build_type)
+if (build_type STREQUAL "debug")
+    add_compile_options(-O0 -g -Wall -Wextra -Wpedantic -Werror)
+else()
+    add_compile_options(-O3 -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 
 # ---- libraries ----
 find_package(fmt CONFIG REQUIRED)
