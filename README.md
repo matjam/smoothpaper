@@ -39,7 +39,7 @@ Does not work on multi-monitor setups as it currently finds the first screen and
 
 You will need to install vcpkg to build this project. You can find instructions on how to install vcpkg here: https://github.com/microsoft/vcpkg
 
-I recommedn installing vcpkg in your home directory, but you can install it anywhere you like. I have it installed in `~/.local/share/vcpkg`. You will then need to set `VCPKG_ROOT` to the directory you installed vcpkg in. For example, you can place this in your `.bashrc` or `.zshrc`:
+I recommend installing vcpkg in your home directory, but you can install it anywhere you like. I have it installed in `~/.local/share/vcpkg`. You will then need to set `VCPKG_ROOT` to the directory you installed vcpkg in. For example, you can place this in your `.bashrc` or `.zshrc`:
 
 ```bash
 export VCPKG_ROOT=/home/matjam/.local/share/vcpkg
@@ -62,23 +62,23 @@ I use cmake to build the project. You can build it with the following commands:
 ```bash
 mkdir build
 cd build
-cmake ..
+cmake .. -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
 make
 ```
 
-This will output a binary in the `build/default` directory. You can copy it to your path or run it from the build directory. At some point I'll add an install target to the cmake file.
+This will output the `smoothpaper` binary in the `build/` directory. 
+
+## Installation
+
+Copy `smoothpaper` anywhere in your path, or run from the build directory. 
+
+Copy the `smoothpaper.toml` file to `~/.config/smoothpaper/smoothpaper.toml` and edit it to your liking.
 
 ## Usage
 
-```bash
-Wallpaper changer with smooth transitions for X11 Window Managers.
-Usage:
-  smoothpaper [OPTION...]
+Simply run the `smoothpaper` binary. It will read the configuration file and set the wallpaper for the first screen it finds. It will then transition to the next wallpaper after the delay specified in the configuration file.
 
-  -d, --debug    Enable debug logging
-  -h, --help     Print usage
-  -v, --version  Print version
-```
+It currently logs to stdout and does not daemonize, so you'll need to run it in the background or use a program like `nohup` to run it in the background.
 
 ## Configuration
 
