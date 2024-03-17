@@ -43,7 +43,7 @@ target_compile_features(smoothpaper PRIVATE cxx_std_20)
 target_link_libraries(smoothpaper PRIVATE 
     fmt::fmt 
     X11::X11 
-    sfml-system sfml-network sfml-graphics sfml-window 
+    sfml-system sfml-graphics sfml-window 
     spdlog::spdlog 
     toml11::toml11
 )
