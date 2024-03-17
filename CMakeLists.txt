@@ -3,6 +3,9 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 
 file(STRINGS "version.txt" version REGEX "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
 
+set(CMAKE_C_COMPILER gcc)
+set(CMAKE_CXX_COMPILER g++)
+
 project(smoothpaper
     VERSION ${version}
     DESCRIPTION "A wallpaper manager with smooth transitions for X11 Window Managers"
