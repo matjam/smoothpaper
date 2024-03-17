@@ -14,7 +14,6 @@
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/${presetName}",
-        "CMAKE_CXX_COMPILER": "/sbin/g++",
         "CMAKE_BUILD_TYPE": "Debug"
       }
     },
@@ -26,7 +25,6 @@
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/${presetName}",
-        "CMAKE_CXX_COMPILER": "/sbin/g++",
         "CMAKE_BUILD_TYPE": "Release"
       }
     }

@@ -51,3 +51,5 @@ target_link_libraries(smoothpaper PRIVATE
     toml11::toml11
 )
 target_include_directories(smoothpaper PUBLIC "${PROJECT_BINARY_DIR}/src")
+
+install(TARGETS smoothpaper DESTINATION bin)
