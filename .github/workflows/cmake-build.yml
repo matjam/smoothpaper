@@ -22,6 +22,8 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
+    - uses: lukka/get-cmake@latest
+
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11 
 
