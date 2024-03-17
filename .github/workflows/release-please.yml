@@ -1,7 +1,9 @@
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["CMake Build Release"]
+    branches: ["main"]
+    types:
+      - completed  
 
 permissions:
   contents: write
