@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
+file(READ "version.txt" version)
+
 project(smoothpaper
-    VERSION 0.1.0
+    VERSION ${version}
     DESCRIPTION "A wallpaper manager with smooth transitions for X11 Window Managers"
     LANGUAGES CXX
 )
