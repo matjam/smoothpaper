@@ -278,8 +278,8 @@ int main(int argc, char **argv) {
     }
 
     if (!fading_in && time_until_next_wallpaper.asSeconds() > 0) {
-      spdlog::debug("waiting {} seconds until next wallpaper", time_until_next_wallpaper.asSeconds());
-      sf::sleep(sf::seconds(time_until_next_wallpaper.asSeconds()));
+      // if we sleep until the next wallpaper then after we wake the wallpaper will be black
+      sf::sleep(sf::seconds(1));
     }
 
     // Display the view on screen
