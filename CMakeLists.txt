@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
-file(READ "version.txt" version)
+file(STRINGS "version.txt" version REGEX "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
 
 project(smoothpaper
     VERSION ${version}
