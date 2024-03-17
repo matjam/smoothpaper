@@ -288,6 +288,7 @@ int main(int argc, char **argv) {
         spdlog::error("Error: X no longer running, exiting");
         return EXIT_FAILURE;
       }
+      XCloseDisplay(display);
     }
 
     // Display the view on screen
