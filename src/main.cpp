@@ -282,12 +282,12 @@ int main(int argc, char **argv) {
       // if we sleep until the next wallpaper then after we wake the wallpaper will be black
       sf::sleep(sf::seconds(1));
 
-      // check if X is still running
-      auto display = XOpenDisplay(nullptr);
-      if (!display) {
-        spdlog::error("Error: X no longer running, exiting");
-        return EXIT_FAILURE;
-      }
+      // // check if X is still running
+      // auto display = XOpenDisplay(nullptr);
+      // if (!display) {
+      //   spdlog::error("Error: X no longer running, exiting");
+      //   return EXIT_FAILURE;
+      // }
     }
 
     // Display the view on screen
