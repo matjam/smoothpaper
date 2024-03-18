@@ -1,4 +1,4 @@
-# smoothpaper
+# Smoothpaper
 
 Smoothly transitioning wallpaper daemon for X11 Window Mangers.
 
@@ -12,7 +12,7 @@ Its been tested with Qtile, i3, and Openbox, but should work with any X11 WM tha
 
 In my travels from Windows/Mac to using tiling window managers on Linux, I was frustrated with the lack of any way to have a set of wallpapers that transition smoothly while I work. I was using feh and nitrogen to set wallpapers, but the transitions were jarring. I wanted smooth fading between the wallpapers, and couldn't find a program that did this for X11 (I am aware there are programs that do this for Wayland), so I wrote one.
 
-You _can_ use xscreensaver's glslideshow to transition between wallpapers, but it's not as smooth as smoothpaper. 
+You _can_ use xscreensaver's glslideshow to transition between wallpapers, but it's not as smooth as smoothpaper, and requires the xwinwrap program to work, which is a bit of a hack.
 
 Because I'm using SFML to do the transitions, I can use a Texture that is stored on the GPU and the transitions are done by changing the alpha value of the texture, so the transitions are very smooth and use very little CPU.
 
@@ -32,12 +32,36 @@ Because I'm using SFML to do the transitions, I can use a Texture that is stored
 
 - Dynamically change the wallpappers directory (currently you have to restart the program to change the directory
 - Set a specific wallpaper immediately via command line without waiting for the next transition
+- Set the wallpaper for all screens in a multi-monitor setup
+- Add a task bar icon to control the program
+- Add cli commands to control the program
+- More cool transitions? We are using SFML after all.
+
+If you have any feature requests, please open an issue.
 
 ## Limitations
 
 Does not work on multi-monitor setups as it currently finds the first screen and sets the wallpaper for that screen only. Should be easy to fix, but I don't have a multi-monitor setup to test with.
 
-## Building
+Obviously, it only works with X11 window managers, and not Wayland. I may add Wayland support in the future, but I don't use Wayland, so it's not a priority for me - and there are already programs that do this for Wayland.
+
+## Installation
+
+### Arch Linux
+
+Smoothpaper is available in the AUR as `smoothpaper`. You can install it with your favorite AUR helper, such as `yay`:
+
+```bash
+yay -S smoothpaper
+```
+
+Please make sure you raise any issues installing the AUR package in this repository, not the AUR, so I can track them.
+
+### Other Distributions
+
+I don't have packages for other distributions yet. If you would like to package smoothpaper for your distribution, please let me know and I can help you with that.
+
+## Building from Source
 
 You will need to install vcpkg to build this project. You can find instructions on how to install vcpkg here: https://github.com/microsoft/vcpkg
 
@@ -87,8 +111,6 @@ Smoothpaper supports daemonizing with the `-b` flag. This will run the program i
 smoothpaper -b
 ```
 
-
-
 ## Configuration
 
 The program looks for a configuration file in `~/.config/smoothpaper/smoothpaper.toml`. An example configuration file is below:
@@ -136,10 +158,16 @@ framerate_limit = 60
 debug = false
 ```
 
-# Bugs
+## Support
 
 Please use the github Issues to report any bugs or feature requests. I'm happy to accept pull requests for new features or bug fixes, and in fact prefer that. I'm not a C++ programmer by trade, so I'm sure there are many things that could be improved.
 
-# License
+You can also find me as `matjam` on the `#smoothpaper` channel on the [Libera.Chat](https://libera.chat) IRC network.
+
+## Contributing
+
+If you would like to contribute to smoothpaper, please open a pull request. I'm happy to accept any contributions, and will work with you to get your changes merged. I'm not a C++ programmer by trade, so I'm sure there are many things that could be improved. I'm especially interested in any contributions that implement items in the TODO list above.
+
+## License
 
 This program is licensed under the Apache 2.0 license. See the LICENSE file for more information.
