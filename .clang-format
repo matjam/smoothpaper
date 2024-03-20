@@ -6,3 +6,4 @@ AlignAfterOpenBracket: AlwaysBreak
 AlignConsecutiveAssignments: true
 AlignConsecutiveDeclarations: true
 BreaksBeforeBraces: Attach
+IndentWidth: 4

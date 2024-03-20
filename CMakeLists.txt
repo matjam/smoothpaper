@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
-set(CMAKE_VERBOSE_MAKEFILE ON)
+
+set(CMAKE_C_COMPILER clang)
+set(CMAKE_CXX_COMPILER clang++)
+set(CMAKE_CXX_STANDARD 20)
 
 file(STRINGS "version.txt" version REGEX "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
-
-set(CMAKE_C_COMPILER gcc)
-set(CMAKE_CXX_COMPILER g++)
 
 project(smoothpaper
     VERSION ${version}
@@ -29,6 +29,7 @@ find_package(X11 REQUIRED)
 find_package(SFML COMPONENTS system window graphics CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(toml11 CONFIG REQUIRED)
+find_package(CMakeRC)
 
 # ---- target ----
 add_executable(
@@ -42,6 +43,8 @@ add_executable(
     src/Scaling.hpp
 )
 
+cmrc_add_resource_library(conf ALIAS smoothpaper::config NAMESPACE conf smoothpaper.toml)
+
 target_compile_features(smoothpaper PRIVATE cxx_std_20)
 target_link_libraries(smoothpaper PRIVATE 
     fmt::fmt 
@@ -49,6 +52,7 @@ target_link_libraries(smoothpaper PRIVATE
     sfml-system sfml-graphics sfml-window 
     spdlog::spdlog 
     toml11::toml11
+    conf
 )
 target_include_directories(smoothpaper PUBLIC "${PROJECT_BINARY_DIR}/src")
 

@@ -7,22 +7,20 @@
   },
   "configurePresets": [
     {
-      "name": "DEBUG",
-      "displayName": "DEBUG GCC 13.2.1 x86_64-pc-linux-gnu",
-      "description": "Using compilers: C = /sbin/gcc, CXX = /sbin/g++",
+      "name": "Debug",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/${presetName}",
         "CMAKE_BUILD_TYPE": "Debug"
       }
     },
     {
-      "name": "RELEASE",
-      "displayName": "RELEASE GCC 13.2.1 x86_64-pc-linux-gnu",
-      "description": "Using compilers: C = /sbin/gcc, CXX = /sbin/g++",
+      "name": "Release",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/${presetName}",
         "CMAKE_BUILD_TYPE": "Release"
@@ -31,13 +29,13 @@
   ],
   "buildPresets": [
     {
-      "name": "DEBUG",
-      "configurePreset": "DEBUG",
+      "name": "Debug",
+      "configurePreset": "Debug",
       "targets": ["all", "install"]
     },
     {
-      "name": "RELEASE",
-      "configurePreset": "RELEASE",
+      "name": "Release",
+      "configurePreset": "Release",
       "targets": ["all", "install"]
     }
   ]

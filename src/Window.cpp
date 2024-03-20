@@ -64,175 +64,177 @@
 
 // Generally not a fan of global symbols like this, but there's only one display and screen.
 Display *display = nullptr;
-int display_width;
-int display_height;
-int screen;
+int      display_width;
+int      display_height;
+int      screen;
 
 struct window {
-  Window root, window, desktop;
-  Drawable drawable;
-  Visual *visual;
-  Colormap colourmap;
+    Window   root, window, desktop;
+    Drawable drawable;
+    Visual  *visual;
+    Colormap colourmap;
 
-  unsigned int width;
-  unsigned int height;
-  int x;
-  int y;
+    unsigned int width;
+    unsigned int height;
+    int          x;
+    int          y;
 } window;
 
 static void init_x11() {
-  display = XOpenDisplay(nullptr);
-  if (display == nullptr) {
-    spdlog::error("Error: couldn't open display");
-    return;
-  }
-  screen = DefaultScreen(display);
-  display_width = DisplayWidth(display, screen);
-  display_height = DisplayHeight(display, screen);
+    display = XOpenDisplay(nullptr);
+    if (display == nullptr) {
+        spdlog::error("Error: couldn't open display");
+        return;
+    }
+    screen         = DefaultScreen(display);
+    display_width  = DisplayWidth(display, screen);
+    display_height = DisplayHeight(display, screen);
 }
 
 static Window find_subwindow(Window win, int w, int h) {
-  unsigned int i = 0, j = 0;
-  Window troot = {}, parent = {}, *children = nullptr;
-  unsigned int n = 0;
+    unsigned int i = 0, j = 0;
+    Window       troot = {}, parent = {}, *children = nullptr;
+    unsigned int n = 0;
 
-  /* search subwindows with same size as display or work area */
+    /* search subwindows with same size as display or work area */
 
-  for (i = 0; i < 10; i++) {
-    XQueryTree(display, win, &troot, &parent, &children, &n);
+    for (i = 0; i < 10; i++) {
+        XQueryTree(display, win, &troot, &parent, &children, &n);
 
-    for (j = 0; j < n; j++) {
-      XWindowAttributes attrs;
+        for (j = 0; j < n; j++) {
+            XWindowAttributes attrs;
 
-      if (XGetWindowAttributes(display, children[j], &attrs) != 0) {
-        /* Window must be mapped and same size as display or
-         * work space */
-        if (attrs.map_state != 0 && ((attrs.width == display_width && attrs.height == display_height) ||
-                                     (attrs.width == w && attrs.height == h))) {
-          win = children[j];
-          break;
+            if (XGetWindowAttributes(display, children[j], &attrs) != 0) {
+                /* Window must be mapped and same size as display or
+                 * work space */
+                if (attrs.map_state != 0 && ((attrs.width == display_width && attrs.height == display_height) ||
+                                             (attrs.width == w && attrs.height == h))) {
+                    win = children[j];
+                    break;
+                }
+            }
         }
-      }
+
+        XFree(children);
+        if (j == n) {
+            break;
+        }
     }
 
-    XFree(children);
-    if (j == n) {
-      break;
-    }
-  }
-
-  return win;
+    return win;
 }
 
 static Window find_desktop_window(Window *p_root, Window *p_desktop) {
-  Atom type = 0;
-  int format = 0, i = 0;
-  uint64_t nitems = 0, bytes = 0;
-  unsigned int n = 0;
-  Window root = RootWindow(display, screen);
-  Window win = 0;
-  Window troot = {}, parent = {}, *children = nullptr;
-  unsigned char *buf = nullptr;
+    Atom           type   = 0;
+    int            format = 0, i = 0;
+    uint64_t       nitems = 0, bytes = 0;
+    unsigned int   n     = 0;
+    Window         root  = RootWindow(display, screen);
+    Window         win   = 0;
+    Window         troot = {}, parent = {}, *children = nullptr;
+    unsigned char *buf = nullptr;
 
-  if (p_root == nullptr || p_desktop == nullptr) {
-    return 0;
-  }
-
-  /* some window managers set __SWM_VROOT to some child of root window */
-
-  XQueryTree(display, root, &troot, &parent, &children, &n);
-  for (i = 0; i < (int)n; i++) {
-    if (XGetWindowProperty(display, children[i], ATOM(__SWM_VROOT), 0, 1, False, XA_WINDOW, &type, &format, &nitems,
-                           &bytes, &buf) == Success &&
-        type == XA_WINDOW) {
-      win = *reinterpret_cast<Window *>(buf);
-      XFree(buf);
-      XFree(children);
-      spdlog::debug(": desktop window ({}) found from __SWM_VROOT property", win);
-
-      *p_root = win;
-      *p_desktop = win;
-      return win;
+    if (p_root == nullptr || p_desktop == nullptr) {
+        return 0;
     }
+
+    /* some window managers set __SWM_VROOT to some child of root window */
+
+    XQueryTree(display, root, &troot, &parent, &children, &n);
+    for (i = 0; i < (int)n; i++) {
+        if (XGetWindowProperty(
+                display, children[i], ATOM(__SWM_VROOT), 0, 1, False, XA_WINDOW, &type, &format, &nitems, &bytes,
+                &buf) == Success &&
+            type == XA_WINDOW) {
+            win = *reinterpret_cast<Window *>(buf);
+            XFree(buf);
+            XFree(children);
+            spdlog::debug(": desktop window ({}) found from __SWM_VROOT property", win);
+
+            *p_root    = win;
+            *p_desktop = win;
+            return win;
+        }
+
+        if (buf) {
+            XFree(buf);
+            buf = 0;
+        }
+    }
+    XFree(children);
+
+    /* get subwindows from root */
+    win = find_subwindow(root, -1, -1);
+
+    display_width  = DisplayWidth(display, screen);
+    display_height = DisplayHeight(display, screen);
+
+    win = find_subwindow(win, display_width, display_height);
 
     if (buf) {
-      XFree(buf);
-      buf = 0;
+        XFree(buf);
+        buf = 0;
     }
-  }
-  XFree(children);
 
-  /* get subwindows from root */
-  win = find_subwindow(root, -1, -1);
+    if (win != root) {
+        spdlog::debug("desktop window ({}) is subwindow of root window ({})", win, root);
+    } else {
+        spdlog::debug("desktop window ({}) is root window", win);
+    }
 
-  display_width = DisplayWidth(display, screen);
-  display_height = DisplayHeight(display, screen);
+    *p_root    = root;
+    *p_desktop = win;
 
-  win = find_subwindow(win, display_width, display_height);
-
-  if (buf) {
-    XFree(buf);
-    buf = 0;
-  }
-
-  if (win != root) {
-    spdlog::debug("desktop window ({}) is subwindow of root window ({})", win, root);
-  } else {
-    spdlog::debug("desktop window ({}) is root window", win);
-  }
-
-  *p_root = root;
-  *p_desktop = win;
-
-  return win;
+    return win;
 }
 
 sf::RenderWindow *getRenderWindow() {
-  spdlog::info("finding desktop window");
+    spdlog::info("finding desktop window");
 
-  init_x11();
-  if (!display) {
-    return nullptr;
-  }
+    init_x11();
+    if (!display) {
+        return nullptr;
+    }
 
-  window.x = 0;
-  window.y = 0;
-  window.width = static_cast<unsigned int>(DisplayWidth(display, screen));
-  window.height = static_cast<unsigned int>(DisplayHeight(display, screen));
+    window.x      = 0;
+    window.y      = 0;
+    window.width  = static_cast<unsigned int>(DisplayWidth(display, screen));
+    window.height = static_cast<unsigned int>(DisplayHeight(display, screen));
 
-  if (!find_desktop_window(&window.root, &window.desktop)) {
-    spdlog::error("Error: couldn't find desktop window");
-    return nullptr;
-  }
+    if (!find_desktop_window(&window.root, &window.desktop)) {
+        spdlog::error("Error: couldn't find desktop window");
+        return nullptr;
+    }
 
-  spdlog::info("desktop window found width={} height={}", window.width, window.height);
+    spdlog::info("desktop window found width={} height={}", window.width, window.height);
 
-  // Create an override_redirect True window.
-  window.visual = DefaultVisual(display, screen);
-  window.colourmap = DefaultColormap(display, screen);
+    // Create an override_redirect True window.
+    window.visual    = DefaultVisual(display, screen);
+    window.colourmap = DefaultColormap(display, screen);
 
-  int depth = 0, flags = CWOverrideRedirect | CWBackingStore | CWBackPixel;
-  Visual *visual = nullptr;
-  Atom xa;
+    int     depth = 0, flags = CWOverrideRedirect | CWBackingStore | CWBackPixel;
+    Visual *visual = nullptr;
+    Atom    xa;
 
-  depth = CopyFromParent;
-  visual = CopyFromParent;
+    depth  = CopyFromParent;
+    visual = CopyFromParent;
 
-  XSetWindowAttributes attrs = {
-      ParentRelative, 0L, 0, 0L, 0, 0, Always, 0L, 0L, False, StructureNotifyMask | ExposureMask, 0L, True, 0, 0};
-  window.window = XCreateWindow(display, window.root, window.x, window.y, window.width, window.height, 0, depth,
-                                InputOutput, visual, static_cast<unsigned long>(flags), &attrs);
-  XLowerWindow(display, window.window);
-  xa = ATOM(_NET_WM_WINDOW_TYPE);
-  Atom prop;
-  prop = ATOM(_NET_WM_WINDOW_TYPE_DESKTOP);
+    XSetWindowAttributes attrs = {
+        ParentRelative, 0L, 0, 0L, 0, 0, Always, 0L, 0L, False, StructureNotifyMask | ExposureMask, 0L, True, 0, 0};
+    window.window = XCreateWindow(
+        display, window.root, window.x, window.y, window.width, window.height, 0, depth, InputOutput, visual,
+        static_cast<unsigned long>(flags), &attrs);
+    XLowerWindow(display, window.window);
+    xa = ATOM(_NET_WM_WINDOW_TYPE);
+    Atom prop;
+    prop = ATOM(_NET_WM_WINDOW_TYPE_DESKTOP);
 
-  XChangeProperty(display, window.window, xa, XA_ATOM, 32, PropModeReplace, (unsigned char *)&prop, 1);
-  spdlog::info("creating SFML render window");
+    XChangeProperty(display, window.window, xa, XA_ATOM, 32, PropModeReplace, (unsigned char *)&prop, 1);
+    spdlog::info("creating SFML render window");
 
-  // this is the window we want to draw to with SFML.
+    // this is the window we want to draw to with SFML.
 
-  sf::RenderWindow *render_window = new sf::RenderWindow(window.window);
+    sf::RenderWindow *render_window = new sf::RenderWindow(window.window);
 
-  return render_window;
+    return render_window;
 }
