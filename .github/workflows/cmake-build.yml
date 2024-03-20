@@ -37,5 +37,5 @@ jobs:
     - name: Run CMake consuming CMakePreset.json and run vcpkg to build packages
       uses: lukka/run-cmake@v10
       with:
-        configurePreset: 'RELEASE'
-        buildPreset: 'RELEASE'
+        configurePreset: 'Release'
+        buildPreset: 'Release'
