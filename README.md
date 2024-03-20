@@ -168,6 +168,10 @@ You can also find me as `matjam` on the `#smoothpaper` channel on the [Libera.Ch
 
 If you would like to contribute to smoothpaper, please open a pull request. I'm happy to accept any contributions, and will work with you to get your changes merged. I'm not a C++ programmer by trade, so I'm sure there are many things that could be improved. I'm especially interested in any contributions that implement items in the TODO list above.
 
+## Thanks
+
+ - vee on libera.chat for beta testing and feature requests
+
 ## License
 
 This program is licensed under the Apache 2.0 license. See the LICENSE file for more information.
