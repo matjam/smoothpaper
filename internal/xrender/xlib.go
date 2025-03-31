@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
+
+	"github.com/charmbracelet/log"
 )
 
 // RootWindow holds the Xlib display and root window identifiers.
@@ -23,8 +25,8 @@ type RootWindow struct {
 	Display *C.Display
 	Window  C.Window
 	Screen  C.int
-	Width   int
-	Height  int
+	Width   C.int
+	Height  C.int
 }
 
 // GetRootWindow opens the default display and returns the root window.
@@ -35,7 +37,17 @@ func GetRootWindow() (*RootWindow, error) {
 	}
 	screen := C.XDefaultScreen(dpy)
 	root := C.XRootWindow(dpy, screen)
-	return &RootWindow{Display: dpy, Window: root, Screen: screen}, nil
+	rw := &RootWindow{Display: dpy, Window: root, Screen: screen}
+
+	rw.Width = C.screen_width(dpy)
+	rw.Height = C.screen_height(dpy)
+
+	if rw.Width == 0 || rw.Height == 0 {
+		C.XCloseDisplay(dpy)
+		return nil, fmt.Errorf("unable to get screen dimensions")
+	}
+
+	return rw, nil
 }
 
 // SetImage takes a Go image.Image, converts it to an XImage, copies it into a Pixmap,
@@ -90,7 +102,7 @@ func (rw *RootWindow) SetImage(img image.Image) error {
 	cData := C.CBytes(data)
 	defer C.free(cData)
 
-	fmt.Printf("width=%d, height=%d, depth=%d, bpp=%d, paddedRowSize=%d\n",
+	log.Infof("width=%d, height=%d, depth=%d, bpp=%d, paddedRowSize=%d",
 		w, h, int(depth), bpp, paddedRowSize)
 
 	ximage := C.XCreateImage(
