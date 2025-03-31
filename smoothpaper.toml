@@ -30,10 +30,9 @@ fade_speed = 1.0
 # the delay between images, in seconds. Must be an integer.
 delay = 5
 
-# SFML's window redraw framerate limit. This is the maximum number of frames per second 
-# the window will redraw at. Higher numbers will be smoother, but will use more CPU during
-# fade in of a new wallpaper. smoothpaper sleeps between transitions so should not use any
-# CPU when idle.
+# frames per second for the opengl renderer. This is the maximum number of frames per second
+# that will be rendered. Lowering this value will reduce CPU usage, but may cause the animation 
+# to be less smooth.
 framerate_limit = 60
 
 # whether to display debug information or not.

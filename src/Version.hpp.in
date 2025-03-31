@@ -1,4 +1,0 @@
-// configured from cmake
-#define SMOOTHPAPER_VERSION_MAJOR @smoothpaper_VERSION_MAJOR@
-#define SMOOTHPAPER_VERSION_MINOR @smoothpaper_VERSION_MINOR@
-#define SMOOTHPAPER_VERSION_PATCH @smoothpaper_VERSION_PATCH@
