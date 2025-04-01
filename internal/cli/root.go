@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
 	"github.com/matjam/smoothpaper"
+	"github.com/matjam/smoothpaper/internal/command"
 	"github.com/matjam/smoothpaper/internal/wallpaper"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -45,7 +46,43 @@ X11 Window Managers using OpenGL for hardware acceleration.`,
 			return
 		}
 
+		if v, err := cmd.Flags().GetBool("installconfig"); err == nil && v {
+			configDir := os.Getenv("XDG_CONFIG_HOME")
+			if configDir == "" {
+				configDir = os.Getenv("HOME") + "/.config"
+			}
+
+			configPath := filepath.Join(configDir, "smoothpaper", "smoothpaper.toml")
+
+			if _, err := os.Stat(configPath); err == nil {
+				log.Warnf("Config file already exists at %v", configPath)
+				return
+			}
+
+			if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+				log.Fatalf("Error creating config directory: %v", err)
+			}
+
+			if err := os.WriteFile(configPath, []byte(smoothpaper.DefaultConfig), 0644); err != nil {
+				log.Fatalf("Error writing config file: %v", err)
+			}
+
+			log.Infof("Installed default config file at %v", configPath)
+			return
+		}
+
 		startManager()
+	},
+}
+
+var statusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Get smoothpaper status",
+	Long:  `Returns the current status of the smoothpaper process.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := command.GetStatus(); err != nil {
+			log.Fatalf("Error pinging socket: %v", err)
+		}
 	},
 }
 
@@ -88,6 +125,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("debug", "d", false, "Enable debug logging")
 	rootCmd.PersistentFlags().BoolP("version", "v", false, "Print version")
 	rootCmd.PersistentFlags().BoolP("help", "h", false, "Print usage")
+
+	rootCmd.AddCommand(statusCmd)
 }
 
 func initConfig() {
@@ -135,6 +174,14 @@ func printJSONColored(data interface{}) {
 }
 
 func startManager() {
+	err := command.GetStatus()
+	if err == nil {
+		log.Infof("smoothpaper is already running, exiting")
+		os.Exit(0)
+	}
+
+	log.Info("Searching for images ...")
+
 	wallpapers, err := os.ReadDir(canonicalPath(viper.GetString("wallpapers")))
 	if err != nil {
 		log.Fatalf("Error reading wallpapers directory: %v", err)
@@ -143,28 +190,55 @@ func startManager() {
 	if len(wallpapers) == 0 {
 		log.Fatal("No wallpapers found in the specified directory.")
 	}
-	log.Infof("Found %d wallpapers in %s", len(wallpapers), viper.GetString("wallpapers"))
+
+	wallpaperPaths := make([]string, 0)
+	for i, wallpaper := range wallpapers {
+		if wallpaper.IsDir() {
+			continue
+		}
+
+		name := strings.ToLower(wallpaper.Name())
+		if strings.HasSuffix(name, ".png") ||
+			strings.HasSuffix(name, ".jpg") ||
+			strings.HasSuffix(name, ".jpeg") ||
+			strings.HasSuffix(name, ".gif") {
+			wallpaperPaths = append(wallpaperPaths, filepath.Join(canonicalPath(viper.GetString("wallpapers")), wallpaper.Name()))
+
+			log.Infof("Found wallpaper: %s", wallpaperPaths[i])
+
+			continue
+		}
+	}
+
+	if len(wallpaperPaths) == 0 {
+		log.Fatal("No valid wallpapers found in the specified directory.")
+	}
+
+	log.Infof("Found %d wallpapers in %s", len(wallpaperPaths), viper.GetString("wallpapers"))
 	log.Infof("First wallpaper: %s", wallpapers[0].Name())
 	log.Infof("Shuffle: %v", viper.GetBool("shuffle"))
-
-	wallpaperPaths := make([]string, len(wallpapers))
-	for i, wallpaper := range wallpapers {
-		wallpaperPaths[i] = filepath.Join(canonicalPath(viper.GetString("wallpapers")), wallpaper.Name())
-	}
 
 	manager := wallpaper.NewManager(wallpaperPaths)
 	if viper.GetBool("shuffle") {
 		manager.Shuffle()
 	}
 
-	// go func() {
-	// 	log.Infof("sleeping for 60 seconds")
-	// 	time.Sleep(60 * time.Second)
-	// 	log.Infof("stopping the daemon")
-	// 	manager.Stop()
-	// }()
+	go func() {
+		log.Infof("Starting socket server")
+		wallpaper.StartSocketServer(manager)
+	}()
 
 	log.Infof("Running with %d wallpapers", len(manager.GetWallpapers()))
 	manager.Run()
 
+	// unlink the socket
+	sockDir := os.Getenv("XDG_RUNTIME_DIR")
+	if sockDir == "" {
+		sockDir = os.TempDir()
+	}
+	sockPath := sockDir + "/smoothpaper.sock"
+
+	os.Remove(sockPath)
+
+	log.Infof("smoothpaper exited")
 }

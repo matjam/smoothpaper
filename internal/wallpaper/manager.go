@@ -14,11 +14,29 @@ import (
 	"github.com/spf13/viper"
 )
 
+type CommandType string
+
+const (
+	CommandStop CommandType = "stop"
+	CommandNext CommandType = "next"
+	CommandLoad CommandType = "load"
+)
+
+// Command is used to send commands to the wallpaper manager
+// via the command channel. The command is a string that specifies
+// the type of command to execute, and args is a slice of strings
+// that contains the arguments for the command.
+type Command struct {
+	Command CommandType `json:"type"`
+	Args    []string    `json:"args"`
+}
+
 type Manager struct {
 	sync.Mutex
-	wallpapers []string // list of wallpaper paths\
-	renderer   render.Renderer
-	exitSignal chan struct{}
+	wallpapers       []string // list of wallpaper paths\
+	renderer         render.Renderer
+	cmds             chan Command
+	currentWallpaper string
 }
 
 func NewManager(wallpapers []string) *Manager {
@@ -34,7 +52,7 @@ func NewManager(wallpapers []string) *Manager {
 	return &Manager{
 		wallpapers: wallpapers,
 		renderer:   renderer,
-		exitSignal: make(chan struct{}, 1),
+		cmds:       make(chan Command, 1),
 	}
 }
 
@@ -42,8 +60,11 @@ func (c *Manager) Stop() {
 	c.Lock()
 	defer c.Unlock()
 
-	if len(c.exitSignal) == 0 {
-		c.exitSignal <- struct{}{}
+	if len(c.cmds) == 0 {
+		c.cmds <- Command{
+			Command: CommandStop,
+			Args:    []string{},
+		}
 	}
 }
 
@@ -67,6 +88,9 @@ func (c *Manager) NextWallpaper() string {
 	}
 	next := c.wallpapers[0]
 	c.wallpapers = append(c.wallpapers[1:], next)
+
+	c.currentWallpaper = next
+
 	return next
 }
 
@@ -94,21 +118,46 @@ func (c *Manager) Run() {
 		delay = 10
 	}
 
-	for {
-		if len(c.exitSignal) > 0 {
-			log.Info("Stopping wallpaper changer...")
-			// read the value from the channel to clear it
-			<-c.exitSignal
-			break
-		}
+	running := true
 
-		if time.Since(timeChanged) > time.Duration(delay)*time.Second {
-			log.Infof("Changing wallpaper after %d seconds", delay)
+	for running {
+		if len(c.cmds) > 0 {
+			cmd := <-c.cmds
+			switch cmd.Command {
+			case CommandStop:
+				log.Info("Stopping wallpaper changer...")
+				running = false
+				continue
+			case CommandNext:
+				log.Info("Received next command")
+				c.Next()
+				timeChanged = time.Now()
+			case CommandLoad:
+				log.Info("Received load command")
+				if len(cmd.Args) == 0 {
+					log.Error("No wallpapers specified for load command")
+					continue
+				}
+				c.SetWallpapers(cmd.Args)
+				log.Infof("Loaded %d wallpapers", len(cmd.Args))
+				c.Shuffle()
+				c.Next()
+				timeChanged = time.Now()
+			default:
+				log.Error("Unknown command:", cmd.Command)
+			}
+		} else if time.Since(timeChanged) > time.Duration(delay)*time.Second {
 			c.Next()
 			timeChanged = time.Now()
 		}
 
 		time.Sleep(500 * time.Millisecond)
+
+		if !c.renderer.IsDisplayRunning() {
+			log.Info("Display is not running, stopping wallpaper changer...")
+			running = false
+			continue
+		}
 	}
 
 	c.renderer.Cleanup()
@@ -121,7 +170,6 @@ func (c *Manager) Next() {
 		log.Fatal("No next wallpaper found")
 		os.Exit(1)
 	}
-	log.Infof("Next wallpaper: %s", nextFile)
 
 	nextImgData, err := os.ReadFile(nextFile)
 	if err != nil {
@@ -133,12 +181,10 @@ func (c *Manager) Next() {
 		log.Fatal("Failed to decode next image:", err)
 		os.Exit(1)
 	}
-	log.Infof("nextImg: %v x %v", nextImg.Bounds().Max.X, nextImg.Bounds().Max.Y)
+	log.Infof("loading %v (%vx%v)", nextFile, nextImg.Bounds().Max.X, nextImg.Bounds().Max.Y)
 
 	err = c.renderer.Transition(nextImg, time.Duration(viper.GetInt("fade_speed"))*time.Second)
 	if err != nil {
 		log.Fatal("Failed to transition images:", err)
 	}
-
-	log.Info("Image set/transition completed successfully.")
 }

@@ -29,4 +29,5 @@ type Renderer interface {
 	Render() error                                             // Render the current image, called in a loop and will block for each frame
 	Cleanup()                                                  // Cleanup resources
 	GetSize() (int, int)                                       // Get the dimensions of the window
+	IsDisplayRunning() bool
 }

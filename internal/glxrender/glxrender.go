@@ -10,6 +10,22 @@ package glxrender
 #include <stdlib.h>
 #include <string.h>
 
+int display_gone = 0;
+
+int handle_io_error(Display* dpy) {
+    display_gone = 1;
+    return 0; // Returning doesn't stop the process, but signals failure
+}
+
+void set_io_error_handler() {
+    XSetIOErrorHandler(handle_io_error);
+}
+
+int is_display_dead() {
+    return display_gone;
+}
+
+
 Atom get_atom(Display* dpy, const char* name) {
     return XInternAtom(dpy, name, False);
 }
@@ -149,6 +165,8 @@ func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate i
 	if dpy == nil {
 		return nil, fmt.Errorf("unable to open X11 display")
 	}
+	C.set_io_error_handler()
+
 	screen := C.XDefaultScreen(dpy)
 	width := int(C.get_display_width(dpy, screen))
 	height := int(C.get_display_height(dpy, screen))
@@ -201,7 +219,6 @@ func (r *glxRenderer) SetImage(img image.Image) error {
 // Transition to the next image with a fade effect. Will block until the transition is complete.
 func (r *glxRenderer) Transition(next image.Image, duration time.Duration) error {
 	if r.texA.id == 0 {
-		log.Info("texA is nil, using a black texture")
 		ta, err := r.createColorTexture(0, 0, 0)
 		if err != nil {
 			log.Errorf("failed to create texture: %v", err)
@@ -449,4 +466,11 @@ func (r *glxRenderer) createColorTexture(rVal, gVal, bVal uint8) (texture, error
 		w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pix))
 
 	return tex, nil
+}
+
+func (r *glxRenderer) IsDisplayRunning() bool {
+	if r.display == nil {
+		return false
+	}
+	return C.is_display_dead() == 0
 }

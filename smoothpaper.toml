@@ -1,10 +1,11 @@
 # smoothpaper configuration file
 
 # path your wallpapers are stored in
-wallpapers = "~/Pictures/wide_walls"
+wallpapers = "~/Pictures"
 
 # whether the files should be shuffled or not. If you do not shuffle, the files will be 
-# displayed in the order they are found which is dependent on the filesystem.
+# displayed in the order they are found which is dependent on the filesystem. I'm not
+# sure why you'd want to do this, but it's an option.
 shuffle = true
 
 # the mode to scale the images. Options are
@@ -30,10 +31,10 @@ shuffle = true
 scale_mode = "horizontal"
 
 # the speed at which the images fade in and out, in seconds.
-fade_speed = 2
+fade_speed = 5
 
 # the delay between images, in seconds. Must be an integer.
-delay = 5
+delay = 300
 
 # frames per second for the opengl renderer. This is the maximum number of frames per second
 # that will be rendered. Lowering this value will reduce CPU usage, but may cause the animation 
