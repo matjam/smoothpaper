@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/go-gl/gl/v2.1/gl"
+	"github.com/spf13/viper"
 )
 
 type Renderer struct {
@@ -83,6 +84,16 @@ func NewRenderer(display *C.Display, window C.Window, width, height int) (*Rende
 }
 
 func (r *Renderer) LoadTextures(imgA, imgB image.Image) error {
+	// Cleanup old textures if any
+	if r.textureA != 0 {
+		gl.DeleteTextures(1, &r.textureA)
+		r.textureA = 0
+	}
+	if r.textureB != 0 {
+		gl.DeleteTextures(1, &r.textureB)
+		r.textureB = 0
+	}
+
 	tA, err := createTexture(imgA)
 	if err != nil {
 		return err
@@ -127,6 +138,7 @@ func createTexture(img image.Image) (uint32, error) {
 }
 
 func (r *Renderer) RenderFade(alpha float32) {
+	gl.ClearColor(0.0, 0.0, 0.0, 1.0) // <- explicitly black
 	gl.Clear(gl.COLOR_BUFFER_BIT)
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
@@ -160,18 +172,21 @@ func drawQuad() {
 }
 
 func (r *Renderer) RenderFadeWithEasing(duration time.Duration, easing EasingMode) {
-	frames := int(duration.Milliseconds() / 16)
+	framerate := viper.GetInt("framerate_limit")
+	if framerate == 0 || framerate > 240 || framerate < 1 {
+		framerate = 30
+	}
+	frameDelay := time.Second / time.Duration(framerate)
+	frames := int(duration / frameDelay)
+
 	start := time.Now()
 
 	for i := 0; i <= frames; i++ {
 		elapsed := time.Since(start)
-		t := float64(elapsed) / float64(duration)
-		if t > 1.0 {
-			t = 1.0
-		}
+		t := min(float64(elapsed)/float64(duration), 1.0)
 		alpha := applyEasing(easing, t)
 		r.RenderFade(float32(alpha))
-		time.Sleep(16 * time.Millisecond)
+		time.Sleep(frameDelay)
 	}
 }
 

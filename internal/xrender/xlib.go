@@ -162,3 +162,27 @@ func (rw *RootWindow) SetImage(img image.Image) error {
 
 	return nil
 }
+
+type DesktopWindow struct {
+	Display *C.Display
+	Root    C.Window
+	Desktop C.Window
+	Window  C.Window
+	Width   int
+	Height  int
+}
+
+func CreateDesktopWindow() *DesktopWindow {
+	cwin := C.create_desktop_window()
+	if cwin.display == nil || cwin.window == 0 {
+		return nil
+	}
+	return &DesktopWindow{
+		Display: cwin.display,
+		Root:    cwin.root,
+		Desktop: cwin.desktop,
+		Window:  cwin.window,
+		Width:   int(cwin.width),
+		Height:  int(cwin.height),
+	}
+}

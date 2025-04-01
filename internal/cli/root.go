@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
@@ -66,6 +67,13 @@ X11 Window Managers using OpenGL for hardware acceleration.`,
 		if viper.GetBool("shuffle") {
 			wallpaperChanger.Shuffle()
 		}
+
+		go func() {
+			log.Infof("sleeping for 60 seconds")
+			time.Sleep(60 * time.Second)
+			log.Infof("stopping the daemon")
+			wallpaperChanger.Stop()
+		}()
 
 		log.Infof("Running with %d wallpapers", len(wallpaperChanger.GetWallpapers()))
 		wallpaperChanger.Run()

@@ -1,7 +1,7 @@
 # smoothpaper configuration file
 
 # path your wallpapers are stored in
-wallpapers = "~/Pictures"
+wallpapers = "~/Pictures/wallpapers"
 
 # whether the files should be shuffled or not. If you do not shuffle, the files will be 
 # displayed in the order they are found which is dependent on the filesystem.
@@ -28,12 +28,12 @@ scale_mode = "vertical"
 fade_speed = 1.0
 
 # the delay between images, in seconds. Must be an integer.
-delay = 5
+delay = 15
 
 # frames per second for the opengl renderer. This is the maximum number of frames per second
 # that will be rendered. Lowering this value will reduce CPU usage, but may cause the animation 
 # to be less smooth.
-framerate_limit = 60
+framerate_limit = 120
 
 # whether to display debug information or not.
 debug = false
