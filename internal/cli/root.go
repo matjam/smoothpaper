@@ -8,12 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
 	"github.com/matjam/smoothpaper"
-	"github.com/matjam/smoothpaper/internal/changer"
+	"github.com/matjam/smoothpaper/internal/wallpaper"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/tidwall/pretty"
@@ -46,37 +45,7 @@ X11 Window Managers using OpenGL for hardware acceleration.`,
 			return
 		}
 
-		wallpapers, err := os.ReadDir(canonicalPath(viper.GetString("wallpapers")))
-		if err != nil {
-			log.Fatalf("Error reading wallpapers directory: %v", err)
-		}
-
-		if len(wallpapers) == 0 {
-			log.Fatal("No wallpapers found in the specified directory.")
-		}
-		log.Infof("Found %d wallpapers in %s", len(wallpapers), viper.GetString("wallpapers"))
-		log.Infof("First wallpaper: %s", wallpapers[0].Name())
-		log.Infof("Shuffle: %v", viper.GetBool("shuffle"))
-
-		wallpaperPaths := make([]string, len(wallpapers))
-		for i, wallpaper := range wallpapers {
-			wallpaperPaths[i] = filepath.Join(canonicalPath(viper.GetString("wallpapers")), wallpaper.Name())
-		}
-
-		wallpaperChanger := changer.NewChanger(wallpaperPaths)
-		if viper.GetBool("shuffle") {
-			wallpaperChanger.Shuffle()
-		}
-
-		go func() {
-			log.Infof("sleeping for 60 seconds")
-			time.Sleep(60 * time.Second)
-			log.Infof("stopping the daemon")
-			wallpaperChanger.Stop()
-		}()
-
-		log.Infof("Running with %d wallpapers", len(wallpaperChanger.GetWallpapers()))
-		wallpaperChanger.Run()
+		startManager()
 	},
 }
 
@@ -163,4 +132,39 @@ func printJSONColored(data interface{}) {
 
 	jPretty := pretty.Color(j, nil)
 	log.Info(string(jPretty))
+}
+
+func startManager() {
+	wallpapers, err := os.ReadDir(canonicalPath(viper.GetString("wallpapers")))
+	if err != nil {
+		log.Fatalf("Error reading wallpapers directory: %v", err)
+	}
+
+	if len(wallpapers) == 0 {
+		log.Fatal("No wallpapers found in the specified directory.")
+	}
+	log.Infof("Found %d wallpapers in %s", len(wallpapers), viper.GetString("wallpapers"))
+	log.Infof("First wallpaper: %s", wallpapers[0].Name())
+	log.Infof("Shuffle: %v", viper.GetBool("shuffle"))
+
+	wallpaperPaths := make([]string, len(wallpapers))
+	for i, wallpaper := range wallpapers {
+		wallpaperPaths[i] = filepath.Join(canonicalPath(viper.GetString("wallpapers")), wallpaper.Name())
+	}
+
+	manager := wallpaper.NewManager(wallpaperPaths)
+	if viper.GetBool("shuffle") {
+		manager.Shuffle()
+	}
+
+	// go func() {
+	// 	log.Infof("sleeping for 60 seconds")
+	// 	time.Sleep(60 * time.Second)
+	// 	log.Infof("stopping the daemon")
+	// 	manager.Stop()
+	// }()
+
+	log.Infof("Running with %d wallpapers", len(manager.GetWallpapers()))
+	manager.Run()
+
 }
