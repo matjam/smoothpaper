@@ -1,4 +1,4 @@
-package wallpaper
+package ipc
 
 import (
 	"bytes"
@@ -13,23 +13,6 @@ import (
 	"github.com/matjam/smoothpaper/internal/render"
 	"github.com/spf13/viper"
 )
-
-type CommandType string
-
-const (
-	CommandStop CommandType = "stop"
-	CommandNext CommandType = "next"
-	CommandLoad CommandType = "load"
-)
-
-// Command is used to send commands to the wallpaper manager
-// via the command channel. The command is a string that specifies
-// the type of command to execute, and args is a slice of strings
-// that contains the arguments for the command.
-type Command struct {
-	Command CommandType `json:"type"`
-	Args    []string    `json:"args"`
-}
 
 type Manager struct {
 	sync.Mutex
@@ -56,14 +39,20 @@ func NewManager(wallpapers []string) *Manager {
 	}
 }
 
+func (c *Manager) CurrentWallpaper() string {
+	c.Lock()
+	defer c.Unlock()
+	return c.currentWallpaper
+}
+
 func (c *Manager) Stop() {
 	c.Lock()
 	defer c.Unlock()
 
 	if len(c.cmds) == 0 {
 		c.cmds <- Command{
-			Command: CommandStop,
-			Args:    []string{},
+			Type: CommandStop,
+			Args: []string{},
 		}
 	}
 }
@@ -123,7 +112,7 @@ func (c *Manager) Run() {
 	for running {
 		if len(c.cmds) > 0 {
 			cmd := <-c.cmds
-			switch cmd.Command {
+			switch cmd.Type {
 			case CommandStop:
 				log.Info("Stopping wallpaper changer...")
 				running = false
@@ -144,7 +133,7 @@ func (c *Manager) Run() {
 				c.Next()
 				timeChanged = time.Now()
 			default:
-				log.Error("Unknown command:", cmd.Command)
+				log.Error("Unknown command:", cmd.Type)
 			}
 		} else if time.Since(timeChanged) > time.Duration(delay)*time.Second {
 			c.Next()
@@ -187,4 +176,11 @@ func (c *Manager) Next() {
 	if err != nil {
 		log.Fatal("Failed to transition images:", err)
 	}
+}
+
+func (c *Manager) EnqueueCommand(cmd Command) {
+	c.Lock()
+	defer c.Unlock()
+
+	c.cmds <- cmd
 }
