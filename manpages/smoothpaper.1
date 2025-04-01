@@ -10,8 +10,40 @@ smoothpaper - A hardware accelerated wallpaper changer
 
 
 .SH DESCRIPTION
-Smoothpaper is a wallpaper changer with smooth transitions for
-X11 Window Managers using OpenGL for hardware acceleration.
+smoothpaper is a hardware-accelerated wallpaper daemon for X11 window managers.
+
+.EX
+It provides smooth, GPU-powered transitions between wallpapers using OpenGL, and is
+intended for use as a long-running background process. You can launch it in daemon mode
+using the -b or --background flag.
+
+Once running, smoothpaper exposes a local UNIX domain socket API for control. You can
+send commands such as:
+
+  • status — check if the daemon is running and inspect the current wallpaper
+  • next   — immediately transition to the next wallpaper
+  • stop   — gracefully shut down the background daemon
+  • load   — load a new list of wallpaper file paths
+
+Wallpapers are shuffled by default (unless configured otherwise), and transitions can
+be customized via the configuration file.
+
+The default configuration file is located at:
+
+  $XDG_CONFIG_HOME/smoothpaper/smoothpaper.toml
+
+Logs are written to:
+
+  $HOME/.local/share/smoothpaper/smoothpaper.log
+
+and are automatically rotated to prevent log growth over time.
+
+You can generate man pages and shell completion scripts for smoothpaper using the built-in
+\&'genman' and 'completion' subcommands. See their help output for usage.
+
+smoothpaper is designed to be lightweight, fast, and aesthetically pleasing for users
+who want animated wallpaper transitions without compromising system performance.
+.EE
 
 
 .SH OPTIONS
