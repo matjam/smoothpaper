@@ -65,7 +65,7 @@ type wlRenderer struct {
 }
 
 //export goHandleGlobal
-func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.uint32_t, iface *C.char, version C.uint32_t) {
+func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.uint32_t, iface *C.char, _ C.uint32_t) {
 	h := cgo.Handle(uintptr(handle))
 	r := h.Value().(*wlRenderer)
 	if r == nil {
@@ -74,17 +74,14 @@ func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.u
 	}
 
 	goIface := C.GoString(iface)
-	log.Debugf("Global: %s (name=%d version=%d)", goIface, name, version)
 
 	switch goIface {
 	case "zwlr_layer_shell_v1":
 		r.layerShell = (*C.struct_zwlr_layer_shell_v1)(C.wl_registry_bind(registry, name, &C.zwlr_layer_shell_v1_interface, 1))
-		log.Debug("✅ Bound zwlr_layer_shell_v1")
+		log.Debug("bound zwlr_layer_shell_v1")
 	case "wl_compositor":
 		r.compositor = (*C.struct_wl_compositor)(C.wl_registry_bind(registry, name, &C.wl_compositor_interface, 1))
-		log.Debug("✅ Bound wl_compositor")
-	default:
-		log.Debugf("Skipping unhandled interface: %s", goIface)
+		log.Debug("bound wl_compositor")
 	}
 }
 
@@ -103,7 +100,7 @@ func setupRegistry(r *wlRenderer) error {
 	}
 	handle := cgo.NewHandle(r)
 	r.registryHandle = handle
-	C.wl_registry_add_listener(r.registry, C.get_registry_listener(), unsafe.Pointer(handle))
+	C.wl_registry_add_listener(r.registry, C.get_registry_listener(), unsafe.Pointer(uintptr(handle)))
 	C.wl_display_roundtrip(r.display)
 	C.wl_display_roundtrip(r.display)
 	runtime.KeepAlive(r)
@@ -134,7 +131,7 @@ func createLayerSurface(r *wlRenderer) error {
 	}
 
 	// Then add the listener to get configure events
-	C.zwlr_layer_surface_v1_add_listener(r.layerSurf, C.get_layer_surface_listener(), unsafe.Pointer(r.registryHandle))
+	C.zwlr_layer_surface_v1_add_listener(r.layerSurf, C.get_layer_surface_listener(), unsafe.Pointer(uintptr(r.registryHandle)))
 
 	// Set surface properties
 	C.zwlr_layer_surface_v1_set_anchor(r.layerSurf,

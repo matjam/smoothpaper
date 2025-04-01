@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
+	"github.com/matjam/smoothpaper/internal/glxrender"
 	"github.com/matjam/smoothpaper/internal/render"
 	"github.com/matjam/smoothpaper/internal/wlrenderer"
 	"github.com/spf13/viper"
@@ -23,18 +24,31 @@ type Manager struct {
 }
 
 func NewManager(wallpapers []string) *Manager {
-	// renderer, err := glxrender.NewRenderer(
-	// 	render.ScalingMode(viper.GetString("scale_mode")),
-	// 	render.EasingMode(viper.GetString("easing")),
-	// 	viper.GetInt("framerate_limit"),
-	// )
-	renderer, err := wlrenderer.NewRenderer(
-		render.ScalingMode(viper.GetString("scale_mode")),
-		render.EasingMode(viper.GetString("easing")),
-		viper.GetInt("framerate_limit"),
-	)
-	if err != nil {
-		log.Fatal("Failed to create wallpaper renderer:", err)
+	var renderer render.Renderer
+	var err error
+
+	if os.Getenv("XDG_SESSION_TYPE") == "wayland" {
+		log.Info("Detected Wayland session")
+
+		renderer, err = wlrenderer.NewRenderer(
+			render.ScalingMode(viper.GetString("scale_mode")),
+			render.EasingMode(viper.GetString("easing")),
+			viper.GetInt("framerate_limit"),
+		)
+		if err != nil {
+			log.Fatal("Failed to create wayland renderer:", err)
+		}
+	} else {
+		log.Info("Wayland not detected, assuming X11 session")
+
+		renderer, err = glxrender.NewRenderer(
+			render.ScalingMode(viper.GetString("scale_mode")),
+			render.EasingMode(viper.GetString("easing")),
+			viper.GetInt("framerate_limit"),
+		)
+		if err != nil {
+			log.Fatal("Failed to create glx renderer:", err)
+		}
 	}
 
 	return &Manager{
