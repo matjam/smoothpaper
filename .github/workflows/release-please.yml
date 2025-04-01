@@ -1,9 +1,7 @@
 on:
-  workflow_run:
-    workflows: ["CMake Build Release"]
-    branches: ["main"]
-    types:
-      - completed  
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -19,4 +17,3 @@ jobs:
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           release-type: simple
-
