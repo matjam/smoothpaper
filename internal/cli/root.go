@@ -6,8 +6,10 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/charmbracelet/log"
+	"github.com/matjam/smoothpaper"
 	"github.com/matjam/smoothpaper/internal/cli/cmd"
 	"github.com/matjam/smoothpaper/internal/cli/cmd/utils"
 	"github.com/matjam/smoothpaper/internal/ipc"
@@ -16,6 +18,9 @@ import (
 	"github.com/spf13/viper"
 )
 
+// rootCmd represents the base command when called without any subcommands.
+// It handles the main program execution flow including daemon management,
+// configuration display, and version information.
 var rootCmd = &cobra.Command{
 	Use:   "smoothpaper",
 	Short: "A hardware accelerated wallpaper changer",
@@ -52,18 +57,21 @@ var rootCmd = &cobra.Command{
 	smoothpaper is designed to be lightweight, fast, and aesthetically pleasing for users
 	who want animated wallpaper transitions without compromising system performance.`,
 	Run: func(cmdObj *cobra.Command, args []string) {
-		// Check for --background and fork early
+		// DAEMON MODE: Handle background flag by forking the process
+		// We handle this first to ensure proper daemonization before any other operations
 		if v, err := cmdObj.Flags().GetBool("background"); err == nil && v {
+			// Check if daemon is already running
 			if _, err := ipc.SendStatus(); err == nil {
 				log.Infof("smoothpaper is already running, exiting")
 				os.Exit(0)
 			}
 
+			// Create data directory if it doesn't exist
 			home := os.Getenv("HOME")
 			dataDir := filepath.Join(home, ".local", "share", "smoothpaper")
 			_ = os.MkdirAll(dataDir, 0755)
 
-			// Strip -b from args so the child doesn't daemonize again
+			// Filter out background flags to prevent recursive daemonization
 			filteredArgs := []string{}
 			for _, arg := range os.Args[1:] {
 				if arg != "-b" && arg != "--background" {
@@ -71,29 +79,34 @@ var rootCmd = &cobra.Command{
 				}
 			}
 
+			// Configure daemon context
 			ctx := &daemon.Context{
 				PidFileName: filepath.Join(dataDir, "smoothpaper.pid"),
 				PidFilePerm: 0644,
-				LogFileName: "", // we'll configure logging ourselves
+				LogFileName: "", // Logging is configured separately in cmd.StartManager()
 				WorkDir:     "./",
 				Umask:       027,
 				Args:        append([]string{os.Args[0]}, filteredArgs...),
 			}
 
+			// Fork the process
 			d, err := ctx.Reborn()
 			if err != nil {
 				log.Fatalf("Failed to daemonize: %v", err)
 			}
 			if d != nil {
+				// Parent process exits after successful fork
 				log.Infof("Parent exiting, child PID: %d", d.Pid)
 				os.Exit(0)
 			}
 
+			// Child process continues
 			defer ctx.Release()
 			log.Infof("Daemon process started, PID: %d", os.Getpid())
 			os.Setenv("BACKGROUND_PROCESS", "1")
 		}
 
+		// CONFIGURATION: Display all configuration settings when requested
 		if v, err := cmdObj.Flags().GetBool("show-config"); err == nil && v {
 			allSettings := viper.AllSettings()
 			log.Infof("Using config file: %v", viper.ConfigFileUsed())
@@ -102,30 +115,41 @@ var rootCmd = &cobra.Command{
 			return
 		}
 
+		// VERSION: Print version information and exit
 		if v, err := cmdObj.Flags().GetBool("version"); err == nil && v {
-			// version printing stuff
+			// Display version from the embedded version.txt file
+			log.Infof("smoothpaper version %s", strings.TrimSpace(smoothpaper.Version))
 			return
 		}
 
+		// CONFIG INSTALLATION: Create default config file when requested
 		if v, err := cmdObj.Flags().GetBool("installconfig"); err == nil && v {
 			utils.InstallDefaultConfig()
 			return
 		}
 
-		// ✅ Only call into the daemon/manager here:
+		// MAIN EXECUTION: Start the wallpaper manager service if no other flags were processed
 		cmd.StartManager()
 	},
 }
 
+// Execute adds all child commands to the root command and sets up the configuration.
+// It's the main entry point for the CLI application and is called directly from main.go.
+// This function handles command registration, flag parsing, and error reporting.
 func Execute() {
 	RegisterFlags(rootCmd)
+
+	// Register subcommands
 	rootCmd.AddCommand(cmd.NewStatusCmd())
 	rootCmd.AddCommand(cmd.NewNextCmd())
 	rootCmd.AddCommand(cmd.NewStopCmd())
 	rootCmd.AddCommand(cmd.NewLoadCmd())
 	rootCmd.AddCommand(cmd.NewGenManCmd(rootCmd))
+
+	// Initialize configuration before command execution
 	cobra.OnInitialize(InitConfig)
 
+	// Execute the root command and handle any errors
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

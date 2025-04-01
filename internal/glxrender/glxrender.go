@@ -2,129 +2,7 @@ package glxrender
 
 /*
 #cgo LDFLAGS: -lGL -lX11 -lXrender -lva-glx
-#include <X11/Xlib.h>
-#include <X11/Xatom.h>
-#include <X11/Xutil.h>
-#include <GL/gl.h>
-#include <GL/glx.h>
-#include <stdlib.h>
-#include <string.h>
-
-int display_gone = 0;
-
-int handle_io_error(Display* dpy) {
-    display_gone = 1;
-    return 0; // Returning doesn't stop the process, but signals failure
-}
-
-void set_io_error_handler() {
-    XSetIOErrorHandler(handle_io_error);
-}
-
-int is_display_dead() {
-    return display_gone;
-}
-
-
-Atom get_atom(Display* dpy, const char* name) {
-    return XInternAtom(dpy, name, False);
-}
-
-Window find_subwindow(Display* dpy, Window win, int screen, int width, int height) {
-    Window root, parent, *children;
-    unsigned int nchildren;
-
-    for (int i = 0; i < 10; i++) {
-        if (!XQueryTree(dpy, win, &root, &parent, &children, &nchildren)) {
-            return win;
-        }
-        for (unsigned int j = 0; j < nchildren; j++) {
-            XWindowAttributes attrs;
-            if (XGetWindowAttributes(dpy, children[j], &attrs) != 0 && attrs.map_state != 0) {
-                if ((attrs.width == DisplayWidth(dpy, screen) && attrs.height == DisplayHeight(dpy, screen)) ||
-                    (attrs.width == width && attrs.height == height)) {
-                    win = children[j];
-                    break;
-                }
-            }
-        }
-        XFree(children);
-    }
-    return win;
-}
-
-Window find_desktop_window(Display* dpy, int screen, Window* out_root) {
-    Atom swm_vroot = get_atom(dpy, "__SWM_VROOT");
-    Window root = RootWindow(dpy, screen);
-    Window desktop = root;
-
-    Window root_ret, parent_ret, *children;
-    unsigned int nchildren;
-    if (XQueryTree(dpy, root, &root_ret, &parent_ret, &children, &nchildren)) {
-        for (unsigned int i = 0; i < nchildren; i++) {
-            Atom actual_type;
-            int actual_format;
-            unsigned long nitems, bytes_after;
-            unsigned char *prop = NULL;
-
-            if (XGetWindowProperty(dpy, children[i], swm_vroot, 0, 1, False, XA_WINDOW,
-                                   &actual_type, &actual_format, &nitems, &bytes_after, &prop) == Success &&
-                actual_type == XA_WINDOW && prop) {
-                desktop = *((Window*)prop);
-                XFree(prop);
-                break;
-            }
-            if (prop) XFree(prop);
-        }
-        XFree(children);
-    }
-
-    desktop = find_subwindow(dpy, desktop, screen, -1, -1);
-    *out_root = root;
-    return desktop;
-}
-
-Display* open_display() {
-    return XOpenDisplay(NULL);
-}
-
-int get_display_width(Display* dpy, int screen) {
-    return DisplayWidth(dpy, screen);
-}
-
-int get_display_height(Display* dpy, int screen) {
-    return DisplayHeight(dpy, screen);
-}
-
-Window create_backed_window(Display* dpy, int screen, int x, int y, int width, int height) {
-    Window root;
-    Window desktop = find_desktop_window(dpy, screen, &root);
-
-    XSetWindowAttributes attrs;
-    attrs.override_redirect = True;
-    attrs.backing_store = Always;
-    attrs.background_pixel = BlackPixel(dpy, screen);
-    attrs.event_mask = StructureNotifyMask | ExposureMask;
-
-    unsigned long flags = CWOverrideRedirect | CWBackingStore | CWBackPixel | CWEventMask;
-    Window win = XCreateWindow(
-        dpy, desktop, x, y, width, height, 0,
-        CopyFromParent, InputOutput,
-        CopyFromParent,
-        flags, &attrs);
-
-    Atom wm_type = get_atom(dpy, "_NET_WM_WINDOW_TYPE");
-    Atom wm_type_desktop = get_atom(dpy, "_NET_WM_WINDOW_TYPE_DESKTOP");
-    XChangeProperty(dpy, win, wm_type, XA_ATOM, 32, PropModeReplace, (unsigned char *)&wm_type_desktop, 1);
-
-    XLowerWindow(dpy, win);
-    XMapWindow(dpy, win);
-    XFlush(dpy);
-    return win;
-}
-
-
-
+#include "glxrender.h"
 */
 import "C"
 
@@ -140,52 +18,59 @@ import (
 	"github.com/matjam/smoothpaper/internal/render"
 )
 
+// glxRenderer is the primary type that wraps the OpenGL context and X11 windowing.
+// It uses GLX to interface between OpenGL and the X11 system.
 type glxRenderer struct {
-	display *C.Display
-	window  C.Window
-	context C.GLXContext
-	width   int
-	height  int
+	display *C.Display   // C pointer to the X11 display connection
+	window  C.Window     // The X11 window used for rendering
+	context C.GLXContext // The OpenGL context used with GLX
+	width   int          // Width of the window in pixels
+	height  int          // Height of the window in pixels
 
-	texA texture
-	texB texture
+	texA texture // Primary texture (the currently displayed image)
+	texB texture // Secondary texture (used for transitioning)
 
-	start    time.Time
-	duration time.Duration
-	fading   bool
+	start    time.Time     // Start time of the transition
+	duration time.Duration // Duration of the transition
+	fading   bool          // Whether a transition is currently in progress
 
-	scaleMode  render.ScalingMode
-	easingMode render.EasingMode
-	framerate  int
+	scaleMode  render.ScalingMode // How images should scale (stretch, fit, center, etc.)
+	easingMode render.EasingMode  // The easing function to apply to alpha blending
+	framerate  int                // Frame rate to maintain during rendering
 }
 
+// NewRenderer initializes the GLX context, creates a fullscreen override-redirect X11 window,
+// and binds it to an OpenGL context so we can start rendering.
 func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate int) (render.Renderer, error) {
-	runtime.LockOSThread()
-	dpy := C.open_display()
+	runtime.LockOSThread() // Required: OpenGL contexts must be accessed from a single OS thread
+
+	dpy := C.open_display() // Calls XOpenDisplay(NULL), connects to X11 server using DISPLAY env var
 	if dpy == nil {
 		return nil, fmt.Errorf("unable to open X11 display")
 	}
-	C.set_io_error_handler()
+	C.set_io_error_handler() // Prevents crashing if display disappears
 
-	screen := C.XDefaultScreen(dpy)
+	screen := C.XDefaultScreen(dpy) // Returns the default screen index for the display
 	width := int(C.get_display_width(dpy, screen))
 	height := int(C.get_display_height(dpy, screen))
-	win := C.create_backed_window(dpy, screen, 0, 0, C.int(width), C.int(height))
+	win := C.create_backed_window(dpy, screen, 0, 0, C.int(width), C.int(height)) // Creates a special window used as our OpenGL target
 
+	// These attributes request a visual (pixel format) with RGBA, 24-bit depth, and double buffering
 	attribs := []C.int{C.GLX_RGBA, C.GLX_DEPTH_SIZE, 24, C.GLX_DOUBLEBUFFER, 0}
-	vi := C.glXChooseVisual(dpy, screen, &attribs[0])
+	vi := C.glXChooseVisual(dpy, screen, &attribs[0]) // Finds an appropriate visual configuration
 	if vi == nil {
 		return nil, fmt.Errorf("no suitable visual")
 	}
 
-	ctx := C.glXCreateContext(dpy, vi, nil, C.True)
-	C.glXMakeCurrent(dpy, C.GLXDrawable(win), ctx)
+	ctx := C.glXCreateContext(dpy, vi, nil, C.True) // Creates an OpenGL context associated with the visual
+	C.glXMakeCurrent(dpy, C.GLXDrawable(win), ctx)  // Makes this OpenGL context current to the created window
 
+	// Initialize Go-side OpenGL bindings
 	if err := gl.Init(); err != nil {
 		return nil, fmt.Errorf("opengl init failed: %w", err)
 	}
-	gl.Viewport(0, 0, int32(width), int32(height))
-	gl.ClearColor(0.0, 0.0, 0.0, 1.0)
+	gl.Viewport(0, 0, int32(width), int32(height)) // Sets up the viewport to match the window size
+	gl.ClearColor(0.0, 0.0, 0.0, 1.0)              // Default clear color is opaque black
 
 	return &glxRenderer{
 		display:    dpy,
@@ -199,15 +84,17 @@ func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate i
 	}, nil
 }
 
+// GetSize returns the dimensions of the rendering window.
 func (r *glxRenderer) GetSize() (int, int) {
 	return r.width, r.height
 }
 
+// SetImage loads a new image into texA. Any existing texture is deleted first.
 func (r *glxRenderer) SetImage(img image.Image) error {
 	if r.texA.id != 0 {
 		gl.DeleteTextures(1, &r.texA.id)
 	}
-	t, err := r.createTexture(img)
+	t, err := r.createTexture(img) // Converts Go image to OpenGL texture
 	if err != nil {
 		return err
 	}
@@ -216,9 +103,10 @@ func (r *glxRenderer) SetImage(img image.Image) error {
 	return nil
 }
 
-// Transition to the next image with a fade effect. Will block until the transition is complete.
+// Transition sets up texB and blends it over texA for a specified duration using easing.
 func (r *glxRenderer) Transition(next image.Image, duration time.Duration) error {
 	if r.texA.id == 0 {
+		// Create a blank black fallback texture if nothing is currently loaded
 		ta, err := r.createColorTexture(0, 0, 0)
 		if err != nil {
 			log.Errorf("failed to create texture: %v", err)
@@ -239,6 +127,7 @@ func (r *glxRenderer) Transition(next image.Image, duration time.Duration) error
 	r.duration = duration
 	r.fading = true
 
+	// Main rendering loop for the duration of the transition
 	for r.fading {
 		err = r.Render()
 		if err != nil {
@@ -274,40 +163,47 @@ func (r *glxRenderer) Render() error {
 	} else {
 		r.renderFade(alpha, r.texA, r.texB)
 	}
+
+	// Swaps the front and back buffer to update the screen
 	C.glXSwapBuffers(r.display, C.GLXDrawable(r.window))
 	time.Sleep(time.Second / time.Duration(r.framerate))
 	return nil
 }
 
+// texture holds an OpenGL texture ID and its size.
 type texture struct {
 	id     uint32
 	width  int
 	height int
 }
 
+// createTexture takes a Go image.Image and turns it into an OpenGL texture.
 func (r *glxRenderer) createTexture(img image.Image) (texture, error) {
 	var tex texture
-
 	bounds := img.Bounds()
 	tex.width = bounds.Dx()
 	tex.height = bounds.Dy()
 
+	// Convert to RGBA (required format for OpenGL upload)
 	rgba := image.NewRGBA(bounds)
 	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
 
+	// Generate and bind OpenGL texture ID
 	gl.GenTextures(1, &tex.id)
 	gl.BindTexture(gl.TEXTURE_2D, tex.id)
+
+	// Set texture parameters
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 
+	// Upload pixel data to GPU
 	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
 		int32(tex.width), int32(tex.height), 0,
 		gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(rgba.Pix))
 
-	gl.GenerateMipmap(gl.TEXTURE_2D)
-
+	gl.GenerateMipmap(gl.TEXTURE_2D) // Create mipmaps for smoother scaling
 	return tex, nil
 }
 
