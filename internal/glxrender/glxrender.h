@@ -3,6 +3,7 @@
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -122,4 +123,33 @@ Window create_backed_window(Display *dpy, int screen, int x, int y, int width, i
     XMapWindow(dpy, win);   // Make visible
     XFlush(dpy);            // Ensure commands are sent to X server
     return win;
+}
+
+// Create a Pixmap from raw 32-bit image data and set it as the root background
+// image should be in XImage-compatible format (32-bit RGBA or BGRA)
+void set_root_pixmap(Display *dpy, int screen, const unsigned char *data, int width, int height) {
+    Window root   = RootWindow(dpy, screen);
+    Pixmap pixmap = XCreatePixmap(dpy, root, width, height, DefaultDepth(dpy, screen));
+
+    GC      gc  = XCreateGC(dpy, pixmap, 0, NULL);
+    XImage *img = XCreateImage(
+        dpy, DefaultVisual(dpy, screen), DefaultDepth(dpy, screen), ZPixmap, 0, (char *)malloc(width * height * 4),
+        width, height, 32, 0);
+
+    memcpy(img->data, data, width * height * 4);
+    XPutImage(dpy, pixmap, gc, img, 0, 0, 0, 0, width, height);
+
+    XSetWindowBackgroundPixmap(dpy, root, pixmap);
+    XClearWindow(dpy, root);
+
+    Atom prop_root = get_atom(dpy, "_XROOTPMAP_ID");
+    Atom prop_eset = get_atom(dpy, "ESETROOT_PMAP_ID");
+
+    XChangeProperty(dpy, root, prop_root, XA_PIXMAP, 32, PropModeReplace, (unsigned char *)&pixmap, 1);
+    XChangeProperty(dpy, root, prop_eset, XA_PIXMAP, 32, PropModeReplace, (unsigned char *)&pixmap, 1);
+
+    XFreeGC(dpy, gc);
+    img->data = NULL; // Prevent XDestroyImage from freeing original data
+    XDestroyImage(img);
+    XFlush(dpy);
 }

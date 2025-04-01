@@ -12,6 +12,7 @@ import (
 	"image/draw"
 	"runtime"
 	"time"
+	"unsafe"
 
 	"github.com/charmbracelet/log"
 	"github.com/go-gl/gl/v2.1/gl"
@@ -84,6 +85,25 @@ func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate i
 	}, nil
 }
 
+// SetRootPixmap reads pixels from the OpenGL backbuffer, flips vertically, and sets the root pixmap
+func (r *glxRenderer) SetRootPixmap() {
+	w, h := r.width, r.height
+	size := w * h * 4
+	buf := make([]byte, size)
+	gl.ReadPixels(0, 0, int32(w), int32(h), gl.BGRA, gl.UNSIGNED_BYTE, gl.Ptr(buf))
+
+	// Flip vertically
+	flipped := make([]byte, size)
+	stride := w * 4
+	for y := 0; y < h; y++ {
+		src := buf[y*stride : (y+1)*stride]
+		dst := flipped[(h-1-y)*stride : (h-y)*stride]
+		copy(dst, src)
+	}
+
+	C.set_root_pixmap(r.display, C.XDefaultScreen(r.display), (*C.uchar)(unsafe.Pointer(&flipped[0])), C.int(w), C.int(h))
+}
+
 // GetSize returns the dimensions of the rendering window.
 func (r *glxRenderer) GetSize() (int, int) {
 	return r.width, r.height
@@ -106,13 +126,13 @@ func (r *glxRenderer) SetImage(img image.Image) error {
 // Transition sets up texB and blends it over texA for a specified duration using easing.
 func (r *glxRenderer) Transition(next image.Image, duration time.Duration) error {
 	if r.texA.id == 0 {
-		// Create a blank black fallback texture if nothing is currently loaded
-		ta, err := r.createColorTexture(0, 0, 0)
+		tex, err := r.createColorTexture(0, 0, 0)
 		if err != nil {
-			log.Errorf("failed to create texture: %v", err)
+			log.Errorf("failed to create fallback texture: %v", err)
 			return err
 		}
-		r.texA = ta
+		r.texA = *tex
+
 	}
 
 	if r.texB.id != 0 {
@@ -134,6 +154,9 @@ func (r *glxRenderer) Transition(next image.Image, duration time.Duration) error
 			return err
 		}
 	}
+
+	// After fade completes, set the backbuffer image as the root pixmap
+	r.SetRootPixmap()
 
 	return nil
 }
@@ -336,7 +359,7 @@ func deleteTexture(tex *texture) {
 	}
 }
 
-func (r *glxRenderer) createColorTexture(rVal, gVal, bVal uint8) (texture, error) {
+func (r *glxRenderer) createColorTexture(rVal, gVal, bVal uint8) (*texture, error) {
 	const w, h = 2, 2           // Small but safe texture size
 	pix := make([]uint8, w*h*4) // RGBA
 
@@ -361,7 +384,7 @@ func (r *glxRenderer) createColorTexture(rVal, gVal, bVal uint8) (texture, error
 	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
 		w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pix))
 
-	return tex, nil
+	return &tex, nil
 }
 
 func (r *glxRenderer) IsDisplayRunning() bool {
