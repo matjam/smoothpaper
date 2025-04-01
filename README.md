@@ -25,6 +25,25 @@ requires the xwinwrap program to work, which is a bit of a hack.
 Because I'm using OpenGL to do the transitions, I can use a Texture that is stored on the GPU and the transitions are
 done by changing the alpha value of the texture, so the transitions are very smooth and use very little CPU.
 
+## 2.0 Release
+
+So, I was pretty annoyed at how difficult adding certain features was to the C++ version of the application, so I
+rewrote it in Go using cgo. This took a couple of days, but I think it was worth it as I now have a clean backend that I
+can also use to implement support for Wayland in the near future.
+
+The program has less exotic dependencies; standard X11 libraries you probably already have installed, no need for SFML
+and all the baggage it brings.
+
+I was even able to implement the same rendering that we had with SFML so it works the same both under a compositor like
+picom, as well as without one.
+
+So, many of the items on the todo list are much closer now to actually getting done. If you want a feature, let me know!
+
+Note one major change is I do not support running in the background. This is the one thing thats super hard in Go, but I
+don't think its necessary as you can start it and background it just fine with `&` and most Window Managers allow you to
+start things with `exec` for example, in `i3`. If it really annoys you, let me know and I'll spend some time on it; its
+not impossible just irksome.
+
 ## Features
 
 - Smoothly transition between wallpapers with fading
@@ -90,27 +109,30 @@ issue and I'll update the docs)
 On Arch Linux, you can install these with the following command:
 
 ```bash
-sudo pacman -S base-devel cmake libx11 libxrandr libxinerama libxcursor libxext libglu
+sudo pacman -S base-devel go mesa glad libxrender libva
 ```
 
 You should then be able to do
 
 ```bash
-go build -o smoothpaper ./cmd/smoothpaper/main.go
+go install ./...
 ```
 
-This will output the `smoothpaper` binary in the current directory.
+This will output the `smoothpaper` binary in your `~/go/bin` folder. You can add that to your path.
 
 ## Installation
 
 Copy `smoothpaper` anywhere in your path, or run from the build directory.
 
-Copy the `smoothpaper.toml` file to `~/.config/smoothpaper/smoothpaper.toml` and edit it to your liking.
+Copy the `smoothpaper.toml` file to `~/.config/smoothpaper/smoothpaper.toml` and edit it to your liking, or use
+`smoothpaper -i` to install the default config.
 
 ## Usage
 
 Simply run the `smoothpaper` binary. It will read the configuration file and set the wallpaper for the first screen it
 finds. It will then transition to the next wallpaper after the delay specified in the configuration file.
+
+### Currently not working:
 
 Smoothpaper supports daemonizing with the `-b` flag. This will run the program in the background and will not print any
 output to the terminal. Logs will be written to `~/.local/share/smoothpaper/smoothpaper.log`, and will be rotated when
@@ -119,6 +141,8 @@ the log file reaches 1MB in size, with 3 backups.
 ```bash
 smoothpaper -b
 ```
+
+TODO: Will get this working again, its just getting late and I'm tired.
 
 ## Configuration
 
@@ -168,7 +192,7 @@ framerate_limit = 60
 debug = false
 ```
 
-## CLI
+## CLI - TODO
 
 Running `smoothpaper` by itself will output some help. You can control a running smoothpaper daemon by using the
 following commands:
@@ -185,7 +209,6 @@ The following switches are supported for the `smoothpaper` command:
 ```
   -c, --config arg     Path to config file
   -i, --installconfig  Install a default config file
-  -b, --background     Run as a daemon
   -d, --debug          Enable debug logging
   -h, --help           Print usage
   -v, --version        Print version
@@ -210,6 +233,7 @@ could be improved. I'm especially interested in any contributions that implement
 ## Thanks
 
 - vee on libera.chat for beta testing and feature requests
+- @strongleong for suggesting being able to control the daemon via a cli tool (in progress!)
 
 ## License
 
