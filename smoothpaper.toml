@@ -4,7 +4,8 @@
 wallpapers = "~/Pictures"
 
 # whether the files should be shuffled or not. If you do not shuffle, the files will be 
-# displayed in the order they are found which is dependent on the filesystem.
+# displayed in the order they are found which is dependent on the filesystem. I'm not
+# sure why you'd want to do this, but it's an option.
 shuffle = true
 
 # the mode to scale the images. Options are
@@ -22,18 +23,22 @@ shuffle = true
 #  "stretched": will stretch the image in both directions to fit your screen. This means
 #               that if the image does not match your screen's aspect ratio, it will be
 #               distorted.
-scale_mode = "vertical"
+#
+#     "center": will center the image on the screen. This means that if the image does not match
+#               your screen's aspect ratio, it will be cropped on the sides or top and bottom.
+#               depending on the mode you choose, or it might just be centered with bars on the sides
+#               or top and bottom.
+scale_mode = "horizontal"
 
-# the speed at which the images fade in and out, in seconds. This may be fractional.
-fade_speed = 1.0
+# the speed at which the images fade in and out, in seconds.
+fade_speed = 5
 
 # the delay between images, in seconds. Must be an integer.
-delay = 5
+delay = 300
 
-# SFML's window redraw framerate limit. This is the maximum number of frames per second 
-# the window will redraw at. Higher numbers will be smoother, but will use more CPU during
-# fade in of a new wallpaper. smoothpaper sleeps between transitions so should not use any
-# CPU when idle.
+# frames per second for the opengl renderer. This is the maximum number of frames per second
+# that will be rendered. Lowering this value will reduce CPU usage, but may cause the animation 
+# to be less smooth.
 framerate_limit = 60
 
 # whether to display debug information or not.
