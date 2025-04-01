@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
+	"github.com/matjam/smoothpaper/internal/glrender"
+	"github.com/matjam/smoothpaper/internal/glxrender"
+	"github.com/matjam/smoothpaper/internal/render"
 	"github.com/matjam/smoothpaper/internal/xrender"
 	"github.com/spf13/viper"
 )
@@ -17,12 +20,16 @@ type Changer struct {
 	sync.Mutex
 	wallpapers   []string // list of wallpaper paths\
 	currentImage image.Image
-	renderer     *xrender.WallpaperRenderer
+	renderer     glrender.Renderer
 	exitSignal   chan struct{}
 }
 
 func NewChanger(wallpapers []string) *Changer {
-	renderer, err := xrender.NewWallpaperRenderer(xrender.FitMode(viper.GetString("scale_mode")))
+	renderer, err := glxrender.NewRenderer(
+		render.ScalingMode(viper.GetString("scale")),
+		render.EasingMode(viper.GetString("easing")),
+		viper.GetInt("framerate"),
+	)
 	if err != nil {
 		log.Fatal("Failed to create wallpaper renderer:", err)
 	}
@@ -114,10 +121,7 @@ func (c *Changer) Run() {
 			c.Next()
 			timeChanged = time.Now()
 		}
-
-		// Sleep for a short duration to avoid busy waiting
-		time.Sleep(33 * time.Millisecond)
-		c.renderer.Renderer.RenderFade(1.0)
+		c.renderer.Render()
 	}
 
 	c.renderer.Cleanup()
@@ -127,16 +131,18 @@ func (c *Changer) Run() {
 func (c *Changer) Next() {
 	// if the current image is nil, we set it to a black image
 	if c.currentImage == nil {
+		width, height := c.renderer.GetSize()
+
 		log.Infof(
 			"currentImage is nil, creating a black image with width %v and height %v",
-			c.renderer.Desktop.Width,
-			c.renderer.Desktop.Height)
+			width,
+			height)
 
 		newImage := image.NewRGBA(image.Rect(0, 0, 1, 1))
 		for i := range 4 {
 			newImage.Pix[i] = 0
 		}
-		c.currentImage = xrender.ScaleImage(newImage, c.renderer.Desktop.Width, c.renderer.Desktop.Height, xrender.FitStretch)
+		c.currentImage = xrender.ScaleImage(newImage, width, height, xrender.FitStretch)
 	}
 
 	nextFile := c.NextWallpaper()
@@ -160,7 +166,7 @@ func (c *Changer) Next() {
 	log.Infof("currentImage: %v", c.currentImage.Bounds())
 	log.Infof("nextImg: %v", nextImg.Bounds())
 
-	err = c.renderer.Transition(c.currentImage, nextImg, 10*time.Second, xrender.EasingEaseInOut)
+	err = c.renderer.Transition(nextImg, 10*time.Second)
 	if err != nil {
 		log.Fatal("Failed to transition images:", err)
 	}
