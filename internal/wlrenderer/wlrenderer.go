@@ -19,6 +19,11 @@ import (
 	"github.com/matjam/smoothpaper/internal/render"
 )
 
+type texture struct {
+	id            C.GLuint
+	width, height int
+}
+
 type wlRenderer struct {
 	width      int
 	height     int
@@ -27,19 +32,21 @@ type wlRenderer struct {
 	framerate  int
 
 	// Wayland core
-	display       *C.struct_wl_display
-	registry      *C.struct_wl_registry
-	surface       *C.struct_wl_surface
-	layerSurf     *C.struct_zwlr_layer_surface_v1
-	layerShell    *C.struct_zwlr_layer_shell_v1
-	eglDisplay    C.EGLDisplay
-	eglContext    C.EGLContext
-	eglSurface    C.EGLSurface
-	currentTex    C.GLuint
-	transitionTex C.GLuint
-	start         time.Time
-	duration      time.Duration
-	fading        bool
+	display    *C.struct_wl_display
+	registry   *C.struct_wl_registry
+	surface    *C.struct_wl_surface
+	layerSurf  *C.struct_zwlr_layer_surface_v1
+	layerShell *C.struct_zwlr_layer_shell_v1
+	eglDisplay C.EGLDisplay
+	eglContext C.EGLContext
+	eglSurface C.EGLSurface
+
+	currentTex    texture
+	transitionTex texture
+
+	start    time.Time
+	duration time.Duration
+	fading   bool
 
 	shaderProgram C.GLuint
 	attribPos     C.GLint
@@ -214,13 +221,22 @@ func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate i
 	r.width = width
 	r.height = height
 
+	posStr := C.CString("a_position")
+	defer C.free(unsafe.Pointer(posStr))
+	texCoordStr := C.CString("a_texCoord")
+	defer C.free(unsafe.Pointer(texCoordStr))
+	texStr := C.CString("u_texture")
+	defer C.free(unsafe.Pointer(texStr))
+	alphaStr := C.CString("u_alpha")
+	defer C.free(unsafe.Pointer(alphaStr))
+
 	// Create shader program
 	prog := compileProgram(vertexShaderSrc, fragmentShaderSrc)
 	r.shaderProgram = prog
-	r.attribPos = C.GLint(C.glGetAttribLocation(prog, C.CString("a_position")))
-	r.attribTex = C.GLint(C.glGetAttribLocation(prog, C.CString("a_texCoord")))
-	r.uniformTex = C.GLint(C.glGetUniformLocation(prog, C.CString("u_texture")))
-	r.uniformAlpha = C.GLint(C.glGetUniformLocation(prog, C.CString("u_alpha")))
+	r.attribPos = C.GLint(C.glGetAttribLocation(prog, posStr))
+	r.attribTex = C.GLint(C.glGetAttribLocation(prog, texCoordStr))
+	r.uniformTex = C.GLint(C.glGetUniformLocation(prog, texStr))
+	r.uniformAlpha = C.GLint(C.glGetUniformLocation(prog, alphaStr))
 
 	return r, nil
 }
@@ -278,9 +294,9 @@ func initEGL(dpy *C.struct_wl_display, eglWindow *C.struct_wl_egl_window) (C.EGL
 
 func (r *wlRenderer) SetImage(img image.Image) error {
 	// Delete previous texture
-	if r.currentTex != 0 {
-		C.glDeleteTextures(1, &r.currentTex)
-		r.currentTex = 0
+	if r.currentTex.id != 0 {
+		C.glDeleteTextures(1, &r.currentTex.id)
+		r.currentTex = texture{}
 	}
 
 	// Convert image to RGBA if not already
@@ -318,13 +334,17 @@ func (r *wlRenderer) SetImage(img image.Image) error {
 		unsafe.Pointer(&rgba.Pix[0]),
 	)
 
-	r.currentTex = tex
+	r.currentTex.id = tex
+	r.currentTex.width = width
+	r.currentTex.height = height
+
 	r.fading = false // this is a static set, no transition yet
 	return nil
 }
+
 func (r *wlRenderer) Transition(next image.Image, duration time.Duration) error {
 	// If no currentTex, fade from black
-	if r.currentTex == 0 {
+	if r.currentTex.id == 0 {
 		blackTex, err := r.createColorTexture(0, 0, 0)
 		if err != nil {
 			return fmt.Errorf("failed to create black fallback texture: %w", err)
@@ -333,9 +353,9 @@ func (r *wlRenderer) Transition(next image.Image, duration time.Duration) error 
 	}
 
 	// Delete old transitionTex if it exists
-	if r.transitionTex != 0 {
-		C.glDeleteTextures(1, &r.transitionTex)
-		r.transitionTex = 0
+	if r.transitionTex.id != 0 {
+		C.glDeleteTextures(1, &r.transitionTex.id)
+		r.transitionTex = texture{}
 	}
 
 	// Upload next image to transitionTex
@@ -343,7 +363,9 @@ func (r *wlRenderer) Transition(next image.Image, duration time.Duration) error 
 	if err != nil {
 		return fmt.Errorf("failed to upload transition image: %w", err)
 	}
-	r.transitionTex = tex
+	r.transitionTex.id = tex
+	r.transitionTex.width = next.Bounds().Dx()
+	r.transitionTex.height = next.Bounds().Dy()
 	r.start = time.Now()
 	r.duration = duration
 	r.fading = true
@@ -353,23 +375,6 @@ func (r *wlRenderer) Transition(next image.Image, duration time.Duration) error 
 		if err := r.Render(); err != nil {
 			return err
 		}
-	}
-
-	// Store old texture for deletion after we're done
-	oldTexture := r.currentTex
-
-	// Swap textures
-	r.currentTex = r.transitionTex
-	r.transitionTex = 0
-
-	// Render one more frame with the final state
-	if err := r.Render(); err != nil {
-		return err
-	}
-
-	// Now delete the old texture after the final frame is rendered
-	if oldTexture != 0 {
-		C.glDeleteTextures(1, &oldTexture)
 	}
 
 	return nil
@@ -395,44 +400,84 @@ func applyEasing(mode render.EasingMode, t float32) float32 {
 }
 
 func (r *wlRenderer) Render() error {
+	// Calculate alpha value
 	alpha := float32(1.0)
-
 	if r.fading {
-		t := float32(time.Since(r.start).Seconds() / r.duration.Seconds())
-		if t >= 1.0 {
-			t = 1.0
+		elapsed := time.Since(r.start)
+		progress := float32(elapsed.Seconds() / r.duration.Seconds())
+
+		if progress >= 1.0 {
+			// Transition complete
+			progress = 1.0
+
+			// Store the old texture for cleanup
+			oldTexture := r.currentTex
+
+			// Swap textures
+			r.currentTex = r.transitionTex
+			r.transitionTex = texture{}
+
+			// Set fading to false to exit the transition loop
 			r.fading = false
+
+			// Render with the final texture before deletion
+			alpha = 1.0
+
+			// Delete old texture after swap
+			if oldTexture.id != 0 {
+				C.glDeleteTextures(1, &oldTexture.id)
+			}
+		} else {
+			// Apply easing to alpha based on progress
+			alpha = applyEasing(r.easingMode, progress)
 		}
-		alpha = applyEasing(r.easingMode, t)
 	}
 
-	// Prepare viewport and clear screen
-	C.glViewport(0, 0, C.GLsizei(r.width), C.GLsizei(r.height))
-	C.glClearColor(0, 0, 0, 1)
+	// Set up rendering
 	C.glClear(C.GL_COLOR_BUFFER_BIT)
-	C.glEnable(C.GL_BLEND)
-	C.glBlendFunc(C.GL_SRC_ALPHA, C.GL_ONE_MINUS_SRC_ALPHA)
+	C.glUseProgram(r.shaderProgram)
 
-	// Draw bottom layer (currentTex) if fading
-	if r.fading && alpha < 1.0 && r.currentTex != 0 {
+	// Draw the main texture
+	if r.fading && alpha < 1.0 && r.currentTex.id != 0 {
+		// When fading, draw current texture with inverse alpha
+		C.glUniform1f(r.uniformAlpha, C.GLfloat(1.0-alpha))
 		C.glActiveTexture(C.GL_TEXTURE0)
-		C.glBindTexture(C.GL_TEXTURE_2D, r.currentTex)
-		r.drawFullscreenQuad(1.0 - alpha)
+		C.glBindTexture(C.GL_TEXTURE_2D, r.currentTex.id)
+		C.glUniform1i(r.uniformTex, 0)
+
+		// Draw the quad with the current texture
+		drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.currentTex.width), C.GLint(r.currentTex.height))
 	}
 
-	// Draw top layer (transitionTex or currentTex)
-	if r.transitionTex != 0 && r.fading {
+	if r.fading && r.transitionTex.id != 0 {
+		// Draw the transition texture with alpha blending
+		C.glEnable(C.GL_BLEND)
+		C.glBlendFunc(C.GL_SRC_ALPHA, C.GL_ONE_MINUS_SRC_ALPHA)
+
+		C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
 		C.glActiveTexture(C.GL_TEXTURE0)
-		C.glBindTexture(C.GL_TEXTURE_2D, r.transitionTex)
-		r.drawFullscreenQuad(alpha)
-	} else if r.currentTex != 0 && !r.fading {
+		C.glBindTexture(C.GL_TEXTURE_2D, r.transitionTex.id)
+		C.glUniform1i(r.uniformTex, 0)
+
+		// Draw the quad with the transition texture
+		drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.transitionTex.width), C.GLint(r.transitionTex.height))
+
+		C.glDisable(C.GL_BLEND)
+	} else if r.currentTex.id != 0 {
+		// Not fading, just draw the current texture at full opacity
+		C.glUniform1f(r.uniformAlpha, 1.0)
 		C.glActiveTexture(C.GL_TEXTURE0)
-		C.glBindTexture(C.GL_TEXTURE_2D, r.currentTex)
-		r.drawFullscreenQuad(1.0)
+		C.glBindTexture(C.GL_TEXTURE_2D, r.currentTex.id)
+		C.glUniform1i(r.uniformTex, 0)
+
+		// Draw the quad with the current texture
+		drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.currentTex.width), C.GLint(r.currentTex.height))
 	}
 
-	C.glDisable(C.GL_BLEND)
+	// Ensure all rendering is complete before swap
 	C.glFinish()
+
+	// Swap buffers and wait for next frame
 	C.eglSwapBuffers(r.eglDisplay, r.eglSurface)
 	time.Sleep(time.Second / time.Duration(r.framerate))
 
@@ -445,13 +490,13 @@ func (r *wlRenderer) GetSize() (int, int) {
 
 func (r *wlRenderer) Cleanup() {
 	// Delete GL textures
-	if r.currentTex != 0 {
-		C.glDeleteTextures(1, &r.currentTex)
-		r.currentTex = 0
+	if r.currentTex.id != 0 {
+		C.glDeleteTextures(1, &r.currentTex.id)
+		r.currentTex = texture{}
 	}
-	if r.transitionTex != 0 {
-		C.glDeleteTextures(1, &r.transitionTex)
-		r.transitionTex = 0
+	if r.transitionTex.id != 0 {
+		C.glDeleteTextures(1, &r.transitionTex.id)
+		r.transitionTex = texture{}
 	}
 
 	// Delete shader program
@@ -474,7 +519,11 @@ func (r *wlRenderer) Cleanup() {
 		r.eglDisplay = 0
 	}
 
-	// Destroy Wayland surface (note: no need to destroy layerSurf separately — tied to wl_surface)
+	if r.layerSurf != nil {
+		C.zwlr_layer_surface_v1_destroy(r.layerSurf)
+		r.layerSurf = nil
+	}
+
 	if r.surface != nil {
 		C.wl_surface_destroy(r.surface)
 		r.surface = nil
@@ -526,7 +575,7 @@ func (r *wlRenderer) uploadImageToTexture(img image.Image) (C.GLuint, error) {
 	return tex, nil
 }
 
-func (r *wlRenderer) createColorTexture(rVal, gVal, bVal uint8) (C.GLuint, error) {
+func (r *wlRenderer) createColorTexture(rVal, gVal, bVal uint8) (texture, error) {
 	const w, h = 2, 2
 	pix := make([]uint8, w*h*4)
 	for i := 0; i < len(pix); i += 4 {
@@ -549,7 +598,7 @@ func (r *wlRenderer) createColorTexture(rVal, gVal, bVal uint8) (C.GLuint, error
 		unsafe.Pointer(&pix[0]),
 	)
 
-	return tex, nil
+	return texture{tex, w, h}, nil
 }
 
 const vertexShaderSrc = `
@@ -574,35 +623,6 @@ const fragmentShaderSrc = `
         gl_FragColor = vec4(texColor.rgb, texColor.a * u_alpha);
     }
 `
-
-func (r *wlRenderer) drawFullscreenQuad(alpha float32) {
-	// Fullscreen quad: two triangles, interleaved [x, y, u, v]
-	vertices := []float32{
-		-1, -1, 0, 1,
-		1, -1, 1, 1,
-		-1, 1, 0, 0,
-		1, -1, 1, 1,
-		1, 1, 1, 0,
-		-1, 1, 0, 0,
-	}
-
-	C.glUseProgram(r.shaderProgram)
-
-	// Upload alpha
-	C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
-	C.glUniform1i(r.uniformTex, 0) // texture unit 0
-
-	// Set up attribute pointers
-	C.glEnableVertexAttribArray(C.GLuint(r.attribPos))
-	C.glEnableVertexAttribArray(C.GLuint(r.attribTex))
-	C.glVertexAttribPointer(C.GLuint(r.attribPos), 2, C.GL_FLOAT, C.GL_FALSE, 4*4, unsafe.Pointer(&vertices[0]))
-	C.glVertexAttribPointer(C.GLuint(r.attribTex), 2, C.GL_FLOAT, C.GL_FALSE, 4*4, unsafe.Pointer(uintptr(unsafe.Pointer(&vertices[0]))+8))
-
-	C.glDrawArrays(C.GL_TRIANGLES, 0, 6)
-
-	C.glDisableVertexAttribArray(C.GLuint(r.attribPos))
-	C.glDisableVertexAttribArray(C.GLuint(r.attribTex))
-}
 
 func compileShader(src string, shaderType C.GLenum) C.GLuint {
 	csrc := C.CString(src)
@@ -677,7 +697,7 @@ func goHandleLayerSurfaceConfigure(handle C.uintptr_t, surface *C.struct_zwlr_la
 }
 
 //export goHandleLayerSurfaceClosed
-func goHandleLayerSurfaceClosed(handle C.uintptr_t, surface *C.struct_zwlr_layer_surface_v1) {
+func goHandleLayerSurfaceClosed(handle C.uintptr_t, _ *C.struct_zwlr_layer_surface_v1) {
 	h := cgo.Handle(uintptr(handle))
 	r := h.Value().(*wlRenderer)
 	if r == nil {
@@ -688,4 +708,93 @@ func goHandleLayerSurfaceClosed(handle C.uintptr_t, surface *C.struct_zwlr_layer
 	log.Debug("Layer surface closed")
 	// Signal to close
 	close(r.configChan)
+}
+
+func drawTexturedQuad(screenWidth, screenHeight int, scaleMode render.ScalingMode, attribPos, attribTex C.GLint, texWidth, texHeight C.GLint) {
+	// Default to full screen quad
+	var x1, y1, x2, y2 float32 = -1.0, -1.0, 1.0, 1.0
+
+	// Texture coordinates (always use full texture)
+	var u1, v1, u2, v2 float32 = 0.0, 1.0, 1.0, 0.0
+
+	// Calculate aspect ratios
+	screenAspect := float32(screenWidth) / float32(screenHeight)
+	textureAspect := float32(texWidth) / float32(texHeight)
+
+	// Adjust coordinates based on scaling mode
+	switch scaleMode {
+	case render.ScalingModeStretch:
+		// Use full screen coordinates (already set)
+
+	case render.ScalingModeFitHorizontal:
+		// Keep width at 100%, adjust height to maintain texture aspect ratio
+		scaledHeight := 1.0 / (textureAspect / screenAspect)
+		y1 = -scaledHeight
+		y2 = scaledHeight
+
+	case render.ScalingModeFitVertical:
+		// Keep height at 100%, adjust width to maintain texture aspect ratio
+		scaledWidth := textureAspect / screenAspect
+		x1 = -scaledWidth
+		x2 = scaledWidth
+
+	case render.ScalingModeCenter:
+		fallthrough
+	default:
+		// "Fill" mode - use the smaller scaling factor to ensure no cropping
+		if textureAspect > screenAspect {
+			// Texture is wider than screen
+			// Fit to width and adjust height
+			scaledHeight := screenAspect / textureAspect
+			y1 = -scaledHeight
+			y2 = scaledHeight
+		} else {
+			// Texture is taller than screen
+			// Fit to height and adjust width
+			scaledWidth := textureAspect / screenAspect
+			x1 = -scaledWidth
+			x2 = scaledWidth
+		}
+	}
+
+	// Interleaved vertex data: [x, y, u, v]
+	vertices := []float32{
+		x1, y1, u1, v1, // Bottom left
+		x2, y1, u2, v1, // Bottom right
+		x1, y2, u1, v2, // Top left
+		x2, y1, u2, v1, // Bottom right
+		x2, y2, u2, v2, // Top right
+		x1, y2, u1, v2, // Top left
+	}
+
+	// Set up vertex attribute pointers
+	C.glEnableVertexAttribArray(C.GLuint(attribPos))
+	C.glEnableVertexAttribArray(C.GLuint(attribTex))
+
+	// Position attribute (first 2 floats)
+	C.glVertexAttribPointer(
+		C.GLuint(attribPos),
+		2,                            // size (x,y)
+		C.GL_FLOAT,                   // type
+		C.GL_FALSE,                   // normalized
+		4*4,                          // stride (4 floats * 4 bytes)
+		unsafe.Pointer(&vertices[0]), // pointer to first position
+	)
+
+	// Texture coordinate attribute (second 2 floats)
+	C.glVertexAttribPointer(
+		C.GLuint(attribTex),
+		2,          // size (u,v)
+		C.GL_FLOAT, // type
+		C.GL_FALSE, // normalized
+		4*4,        // stride (4 floats * 4 bytes)
+		unsafe.Pointer(uintptr(unsafe.Pointer(&vertices[0]))+8), // pointer to first texcoord
+	)
+
+	// Draw the triangles
+	C.glDrawArrays(C.GL_TRIANGLES, 0, 6)
+
+	// Disable attribute arrays
+	C.glDisableVertexAttribArray(C.GLuint(attribPos))
+	C.glDisableVertexAttribArray(C.GLuint(attribTex))
 }
