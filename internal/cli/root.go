@@ -57,6 +57,13 @@ var rootCmd = &cobra.Command{
 	smoothpaper is designed to be lightweight, fast, and aesthetically pleasing for users
 	who want animated wallpaper transitions without compromising system performance.`,
 	Run: func(cmdObj *cobra.Command, args []string) {
+		if v, err := cmdObj.Flags().GetBool("debug"); err == nil && v {
+			// Enable debug logging if the --debug flag is set
+			log.SetLevel(log.DebugLevel)
+			log.SetReportCaller(true)
+			log.Debugf("Debug mode enabled")
+		}
+
 		// DAEMON MODE: Handle background flag by forking the process
 		// We handle this first to ensure proper daemonization before any other operations
 		if v, err := cmdObj.Flags().GetBool("background"); err == nil && v {

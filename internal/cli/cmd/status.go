@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/charmbracelet/log"
 	"github.com/matjam/smoothpaper/internal/ipc"
@@ -34,5 +35,5 @@ func PrintJSONColored(data interface{}) {
 	}
 
 	jPretty := pretty.Color(j, nil)
-	log.Info(string(jPretty))
+	fmt.Println(string(jPretty))
 }

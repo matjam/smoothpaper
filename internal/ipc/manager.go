@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
-	"github.com/matjam/smoothpaper/internal/glxrender"
 	"github.com/matjam/smoothpaper/internal/render"
+	"github.com/matjam/smoothpaper/internal/wlrenderer"
 	"github.com/spf13/viper"
 )
 
@@ -23,7 +23,12 @@ type Manager struct {
 }
 
 func NewManager(wallpapers []string) *Manager {
-	renderer, err := glxrender.NewRenderer(
+	// renderer, err := glxrender.NewRenderer(
+	// 	render.ScalingMode(viper.GetString("scale_mode")),
+	// 	render.EasingMode(viper.GetString("easing")),
+	// 	viper.GetInt("framerate_limit"),
+	// )
+	renderer, err := wlrenderer.NewRenderer(
 		render.ScalingMode(viper.GetString("scale_mode")),
 		render.EasingMode(viper.GetString("easing")),
 		viper.GetInt("framerate_limit"),
@@ -114,7 +119,7 @@ func (c *Manager) Run() {
 			cmd := <-c.cmds
 			switch cmd.Type {
 			case CommandStop:
-				log.Info("Stopping wallpaper changer...")
+				log.Info("Stopping Wallpaper Manager ...")
 				running = false
 				continue
 			case CommandNext:
@@ -140,6 +145,10 @@ func (c *Manager) Run() {
 			timeChanged = time.Now()
 		}
 
+		// Update the image so if the X server goes away and comes back the wallpaper
+		// will be set again
+		c.renderer.Render()
+
 		time.Sleep(500 * time.Millisecond)
 
 		if !c.renderer.IsDisplayRunning() {
@@ -150,7 +159,7 @@ func (c *Manager) Run() {
 	}
 
 	c.renderer.Cleanup()
-	log.Info("Wallpaper changer stopped.")
+	log.Info("Wallpaper Manager stopped.")
 }
 
 func (c *Manager) Next() {

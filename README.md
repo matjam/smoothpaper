@@ -222,7 +222,7 @@ They should be mostly self explanatory; the `--installconfig` flag will install 
 Please use the github Issues to report any bugs or feature requests. I'm happy to accept pull requests for new features
 or bug fixes, and in fact prefer that. I'm a go programmer by trade, so I have no excuses.
 
-You can also find me as `matjam` on the `#smoothpaper` channel on the [Libera.Chat](https://libera.chat) IRC network.
+You can also find me as `matjammer` on Discord. One server I frequent is the Hyprland Cathedral https://hyprland.org/
 
 ## Contributing
 

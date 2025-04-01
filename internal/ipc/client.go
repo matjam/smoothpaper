@@ -27,8 +27,8 @@ func SendLoad(wallpapers []string) error {
 	return err
 }
 
-func SendStatus() (map[string]any, error) {
-	var status map[string]any
+func SendStatus() (*StatusResponse, error) {
+	var status StatusResponse
 	resp, err := getRestyClient().R().
 		SetResult(&status).
 		Get("/status")
@@ -38,7 +38,7 @@ func SendStatus() (map[string]any, error) {
 	if resp.IsError() {
 		return nil, fmt.Errorf("status check failed: %s", resp.Status())
 	}
-	return status, nil
+	return &status, nil
 }
 
 func getRestyClient() *resty.Client {

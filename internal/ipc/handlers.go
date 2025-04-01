@@ -7,19 +7,20 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/matjam/smoothpaper"
+	"github.com/spf13/viper"
 )
 
 // GET /status
 func statusHandler(m ManagerInterface) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		return c.JSONPretty(http.StatusOK, map[string]any{
-			"status":            "ok",
-			"message":           "smoothpaper is running",
-			"version":           strings.Trim(smoothpaper.Version, "\n\r "),
-			"pid":               os.Getpid(),
-			"socket":            os.Getenv("XDG_RUNTIME_DIR") + "/smoothpaper.sock",
-			"config":            os.Getenv("XDG_CONFIG_HOME") + "/smoothpaper/config.yaml",
-			"current_wallpaper": m.CurrentWallpaper(),
+		return c.JSONPretty(http.StatusOK, StatusResponse{
+			Status:           "ok",
+			Message:          "smoothpaper is running",
+			Version:          strings.Trim(smoothpaper.Version, "\n\r "),
+			PID:              os.Getpid(),
+			Socket:           os.Getenv("XDG_RUNTIME_DIR") + "/smoothpaper.sock",
+			Config:           viper.ConfigFileUsed(),
+			CurrentWallpaper: m.CurrentWallpaper(),
 		}, "  ")
 	}
 }
