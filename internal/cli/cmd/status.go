@@ -15,15 +15,13 @@ func NewStatusCmd() *cobra.Command {
 		Short: "Get smoothpaper status",
 		Long:  `Returns the current status of the smoothpaper process.`,
 		Run: func(cmd *cobra.Command, args []string) {
-			response, err := ipc.SendCommand(ipc.Command{
-				Type: ipc.CommandStatus,
-			})
+			response, err := ipc.SendStatus()
 			if err != nil {
 				log.Errorf("Error sending command: %v", err)
 				return
 			}
 
-			PrintJSONColored(response.Data)
+			PrintJSONColored(response)
 		},
 	}
 }

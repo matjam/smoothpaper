@@ -24,9 +24,7 @@ X11 Window Managers using OpenGL for hardware acceleration.`,
 	Run: func(cmdObj *cobra.Command, args []string) {
 		// Check for --background and fork early
 		if v, err := cmdObj.Flags().GetBool("background"); err == nil && v {
-			if _, err := ipc.SendCommand(ipc.Command{
-				Type: ipc.CommandStatus,
-			}); err == nil {
+			if _, err := ipc.SendStatus(); err == nil {
 				log.Infof("smoothpaper is already running, exiting")
 				os.Exit(0)
 			}
@@ -92,6 +90,10 @@ X11 Window Managers using OpenGL for hardware acceleration.`,
 func Execute() {
 	RegisterFlags(rootCmd)
 	rootCmd.AddCommand(cmd.NewStatusCmd())
+	rootCmd.AddCommand(cmd.NewNextCmd())
+	rootCmd.AddCommand(cmd.NewStopCmd())
+	rootCmd.AddCommand(cmd.NewLoadCmd())
+	rootCmd.AddCommand(cmd.NewGenManCmd(rootCmd))
 	cobra.OnInitialize(InitConfig)
 
 	if err := rootCmd.Execute(); err != nil {

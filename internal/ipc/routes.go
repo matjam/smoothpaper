@@ -6,5 +6,7 @@ import (
 
 func RegisterRoutes(e *echo.Echo, manager ManagerInterface) {
 	e.GET("/status", statusHandler(manager))
-	e.POST("/command", commandHandler(manager))
+	e.POST("/stop", stopHandler(manager))
+	e.POST("/next", nextHandler(manager))
+	e.POST("/load", loadHandler(manager))
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/matjam/smoothpaper"
 )
 
+// GET /status
 func statusHandler(m ManagerInterface) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		return c.JSONPretty(http.StatusOK, map[string]any{
@@ -23,13 +24,38 @@ func statusHandler(m ManagerInterface) echo.HandlerFunc {
 	}
 }
 
-func commandHandler(m ManagerInterface) echo.HandlerFunc {
+// POST /stop
+func stopHandler(m ManagerInterface) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		var cmd Command
-		if err := c.Bind(&cmd); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid command"})
-		}
-		m.EnqueueCommand(cmd)
+		m.EnqueueCommand(Command{Type: CommandStop})
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+// POST /next
+func nextHandler(m ManagerInterface) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		m.EnqueueCommand(Command{Type: CommandNext})
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+// POST /load
+func loadHandler(m ManagerInterface) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		var wallpapers []string
+		if err := c.Bind(&wallpapers); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON array of wallpapers"})
+		}
+
+		m.EnqueueCommand(Command{
+			Type: CommandLoad,
+			Args: wallpapers,
+		})
+
+		return c.JSON(http.StatusOK, map[string]any{
+			"status": "ok",
+			"loaded": len(wallpapers),
+		})
 	}
 }

@@ -10,7 +10,38 @@ import (
 	"resty.dev/v3"
 )
 
-func SendCommand(cmd Command) (*Response, error) {
+func SendNext() error {
+	_, err := getRestyClient().R().Post("/next")
+	return err
+}
+
+func SendStop() error {
+	_, err := getRestyClient().R().Post("/stop")
+	return err
+}
+
+func SendLoad(wallpapers []string) error {
+	_, err := getRestyClient().R().
+		SetBody(wallpapers).
+		Post("/load")
+	return err
+}
+
+func SendStatus() (map[string]any, error) {
+	var status map[string]any
+	resp, err := getRestyClient().R().
+		SetResult(&status).
+		Get("/status")
+	if err != nil {
+		return nil, err
+	}
+	if resp.IsError() {
+		return nil, fmt.Errorf("status check failed: %s", resp.Status())
+	}
+	return status, nil
+}
+
+func getRestyClient() *resty.Client {
 	sockDir := os.Getenv("XDG_RUNTIME_DIR")
 	if sockDir == "" {
 		sockDir = os.TempDir()
@@ -30,16 +61,5 @@ func SendCommand(cmd Command) (*Response, error) {
 	client.SetHeader("Accept", "application/json")
 	client.SetHeader("User-Agent", "smoothpaper")
 
-	result := Response{}
-
-	response, err := client.R().SetBody(cmd).SetResult(&result).Post("/command")
-	if err != nil {
-		return nil, err
-	}
-
-	if response.StatusCode() != http.StatusOK {
-		return nil, fmt.Errorf("error sending command: %s", response.Status())
-	}
-
-	return &result, err
+	return client
 }

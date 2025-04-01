@@ -20,9 +20,7 @@ func StartManager() {
 		setupRotatingLogger()
 	}
 
-	if _, err := ipc.SendCommand(ipc.Command{
-		Type: ipc.CommandStatus,
-	}); err == nil {
+	if _, err := ipc.SendStatus(); err == nil {
 		log.Infof("smoothpaper is already running, exiting")
 		os.Exit(0)
 	}
