@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.0](https://github.com/matjam/smoothpaper/compare/v2.3.0...v2.4.0) (2025-04-02)
+
+
+### Features
+
+* add support for multiple wallpaper directories, adjust config and documentation ([ecb3b1d](https://github.com/matjam/smoothpaper/commit/ecb3b1d1e38493952c7dbea02ab4389c4fa168ee))
+
 ## [2.3.0](https://github.com/matjam/smoothpaper/compare/v2.2.1...v2.3.0) (2025-04-01)
 
 
