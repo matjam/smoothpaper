@@ -2,7 +2,6 @@
 
 # path your wallpapers are stored in
 wallpapers = "~/Pictures"
-
 # alternatively, you can specify a list of directories to search for wallpapers
 # wallpapers = ["~/Pictures/wallpapers", "~/Downloads/wide_walls"]
 

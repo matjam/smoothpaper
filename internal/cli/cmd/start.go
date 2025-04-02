@@ -27,36 +27,62 @@ func StartManager() {
 
 	log.Info("Searching for images ...")
 
-	wallpapers, err := os.ReadDir(utils.CanonicalPath(viper.GetString("wallpapers")))
-	if err != nil {
-		log.Fatalf("Error reading wallpapers directory: %v", err)
-	}
-
-	if len(wallpapers) == 0 {
-		log.Fatal("No wallpapers found in the specified directory.")
-	}
-
 	wallpaperPaths := make([]string, 0)
-	for _, wallpaper := range wallpapers {
-		if wallpaper.IsDir() {
-			continue
+	paths := make([]string, 0)
+
+	if !viper.IsSet("wallpapers") {
+		log.Fatal("No wallpapers directory specified. Please set the 'wallpapers' configuration.")
+	}
+
+	wallpapersConfig := viper.Get("wallpapers")
+
+	switch v := wallpapersConfig.(type) {
+	case string:
+		paths = append(paths, utils.CanonicalPath(v))
+	case []any:
+		for _, wallpaperEntry := range v {
+			wallpaper, ok := wallpaperEntry.(string)
+			if !ok {
+				log.Fatalf("Invalid type for wallpaper entry: %T", wallpaperEntry)
+			}
+			paths = append(paths, utils.CanonicalPath(wallpaper))
+		}
+	default:
+		log.Fatalf("Invalid type for wallpapers configuration: %T", v)
+	}
+
+	log.Infof("Wallpaper directories: %v", paths)
+
+	for _, path := range paths {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			log.Fatalf("Wallpaper directory does not exist: %s", path)
 		}
 
-		name := strings.ToLower(wallpaper.Name())
-		if strings.HasSuffix(name, ".png") ||
-			strings.HasSuffix(name, ".jpg") ||
-			strings.HasSuffix(name, ".jpeg") ||
-			strings.HasSuffix(name, ".gif") {
-			wallpaperPaths = append(wallpaperPaths, filepath.Join(utils.CanonicalPath(viper.GetString("wallpapers")), wallpaper.Name()))
+		dirEntries, err := os.ReadDir(path)
+		if err != nil {
+			log.Fatalf("Error reading wallpapers directory: %v", err)
+		}
+
+		for _, entry := range dirEntries {
+			if entry.IsDir() {
+				continue
+			}
+			name := strings.ToLower(entry.Name())
+			if strings.HasSuffix(name, ".png") ||
+				strings.HasSuffix(name, ".jpg") ||
+				strings.HasSuffix(name, ".jpeg") ||
+				strings.HasSuffix(name, ".gif") {
+				wallpaperPaths = append(wallpaperPaths, filepath.Join(path, entry.Name()))
+			}
 		}
 	}
 
 	if len(wallpaperPaths) == 0 {
-		log.Fatal("No valid wallpapers found in the specified directory.")
+		log.Fatal("No valid wallpapers found in the specified directories.")
 	}
 
 	log.Infof("Found %d wallpapers in %s", len(wallpaperPaths), viper.GetString("wallpapers"))
-	log.Infof("First wallpaper: %s", wallpapers[0].Name())
+	log.Infof("First wallpaper: %s", wallpaperPaths[0])
 	log.Infof("Shuffle: %v", viper.GetBool("shuffle"))
 
 	manager := ipc.NewManager(wallpaperPaths)
