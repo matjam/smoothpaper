@@ -16,7 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/charmbracelet/log"
-	"github.com/matjam/smoothpaper/internal/render"
+	"github.com/matjam/smoothpaper/internal/types"
 )
 
 type texture struct {
@@ -24,11 +24,11 @@ type texture struct {
 	width, height int
 }
 
-type wlRenderer struct {
+type WLRenderer struct {
 	width      int
 	height     int
-	scaleMode  render.ScalingMode
-	easingMode render.EasingMode
+	scaleMode  types.ScalingMode
+	easingMode types.EasingMode
 	framerate  int
 
 	// Wayland core
@@ -43,6 +43,7 @@ type wlRenderer struct {
 
 	currentTex    texture
 	transitionTex texture
+	blackTex      texture
 
 	start    time.Time
 	duration time.Duration
@@ -64,10 +65,27 @@ type wlRenderer struct {
 	configChan   chan struct{}
 }
 
+func NewRenderer(scale types.ScalingMode, easing types.EasingMode, framerate int) (*WLRenderer, error) {
+	runtime.LockOSThread() // Required: OpenGL contexts must be accessed from a single OS thread
+
+	r := &WLRenderer{
+		scaleMode:  scale,
+		easingMode: easing,
+		framerate:  framerate,
+		configChan: make(chan struct{}, 1),
+	}
+
+	if err := r.connectToDisplay(); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
 //export goHandleGlobal
 func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.uint32_t, iface *C.char, _ C.uint32_t) {
 	h := cgo.Handle(uintptr(handle))
-	r := h.Value().(*wlRenderer)
+	r := h.Value().(*WLRenderer)
 	if r == nil {
 		log.Error("goHandleGlobal: nil renderer")
 		return
@@ -85,6 +103,72 @@ func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.u
 	}
 }
 
+//export goHandleGlobalRemove
+func goHandleGlobalRemove(handle C.uintptr_t, _ *C.struct_wl_registry, name C.uint32_t) {
+	h := cgo.Handle(uintptr(handle))
+	r := h.Value().(*WLRenderer)
+	if r == nil {
+		log.Error("goHandleGlobalRemove: nil renderer")
+		return
+	}
+
+	log.Debugf("Global removed: name=%d", name)
+	// Check if this was a crucial interface and handle accordingly
+}
+
+//export goHandleLayerSurfaceConfigure
+func goHandleLayerSurfaceConfigure(handle C.uintptr_t, surface *C.struct_zwlr_layer_surface_v1,
+	serial C.uint32_t, width, height C.uint32_t) {
+	log.Debugf("goHandleLayerSurfaceConfigure: handle=%d, surface=%p, serial=%d, width=%d, height=%d",
+		handle, surface, serial, width, height)
+
+	h := cgo.Handle(uintptr(handle))
+	r := h.Value().(*WLRenderer)
+	if r == nil {
+		log.Error("goHandleLayerSurfaceConfigure: nil renderer")
+		return
+	}
+
+	log.Debugf("Layer surface configured: width=%d, height=%d", width, height)
+
+	// Acknowledge the configure
+	C.zwlr_layer_surface_v1_ack_configure(surface, serial)
+
+	// Store the configuration
+	r.configWidth = int(width)
+	r.configHeight = int(height)
+	r.configured = true
+
+	// Signal that configuration is complete
+	select {
+	case r.configChan <- struct{}{}:
+	default:
+	}
+}
+
+//export goHandleLayerSurfaceClosed
+func goHandleLayerSurfaceClosed(handle C.uintptr_t, _ *C.struct_zwlr_layer_surface_v1) {
+	log.Debugf("goHandleLayerSurfaceClosed: handle=%d", handle)
+
+	h := cgo.Handle(uintptr(handle))
+	r := h.Value().(*WLRenderer)
+	if r == nil {
+		log.Error("goHandleLayerSurfaceClosed: nil renderer")
+		return
+	}
+
+	log.Debug("Layer surface closed")
+	// Mark the layer surface as closed
+	r.layerSurf = nil
+	r.display = nil
+	r.configured = false
+	r.configWidth = 0
+	r.configHeight = 0
+	r.eglSurface = nil
+	r.eglContext = nil
+	r.eglDisplay = 0
+}
+
 func connectWaylandDisplay() (*C.struct_wl_display, error) {
 	display := C.connect_wayland_display()
 	if display == nil {
@@ -93,7 +177,7 @@ func connectWaylandDisplay() (*C.struct_wl_display, error) {
 	return display, nil
 }
 
-func setupRegistry(r *wlRenderer) error {
+func setupRegistry(r *WLRenderer) error {
 	r.registry = C.wl_display_get_registry(r.display)
 	if r.registry == nil {
 		return fmt.Errorf("failed to get Wayland registry")
@@ -107,7 +191,7 @@ func setupRegistry(r *wlRenderer) error {
 	return nil
 }
 
-func createLayerSurface(r *wlRenderer) error {
+func createLayerSurface(r *WLRenderer) error {
 	if r.layerShell == nil || r.surface == nil {
 		return fmt.Errorf("required layer-shell or surface not available")
 	}
@@ -165,79 +249,6 @@ func createLayerSurface(r *wlRenderer) error {
 	return nil
 }
 
-func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate int) (render.Renderer, error) {
-	runtime.LockOSThread() // Required: OpenGL contexts must be accessed from a single OS thread
-
-	r := &wlRenderer{
-		scaleMode:  scale,
-		easingMode: easing,
-		framerate:  framerate,
-		configChan: make(chan struct{}, 1),
-	}
-
-	var err error
-	r.display, err = connectWaylandDisplay()
-	if err != nil {
-		return nil, err
-	}
-
-	if err := setupRegistry(r); err != nil {
-		return nil, err
-	}
-
-	// Create the surface after the registry is set up
-	if r.compositor == nil {
-		return nil, fmt.Errorf("failed to bind compositor interface")
-	}
-
-	// Create a new surface from the compositor
-	r.surface = C.wl_compositor_create_surface(r.compositor)
-	if r.surface == nil {
-		return nil, fmt.Errorf("failed to create surface")
-	}
-
-	if err := createLayerSurface(r); err != nil {
-		return nil, err
-	}
-
-	// Now that the surface is configured, use the actual dimensions
-	width, height := r.configWidth, r.configHeight
-	if width == 0 {
-		width = 1
-	}
-	if height == 0 {
-		height = 1
-	}
-
-	log.Debugf("Creating EGL window with size %dx%d", width, height)
-	eglWindow := createWLEGLWindow(r.surface, width, height)
-	runtime.KeepAlive(eglWindow)
-	r.eglDisplay, r.eglSurface, r.eglContext = initEGL(r.display, eglWindow)
-
-	// Use the configured size for the renderer
-	r.width = width
-	r.height = height
-
-	posStr := C.CString("a_position")
-	defer C.free(unsafe.Pointer(posStr))
-	texCoordStr := C.CString("a_texCoord")
-	defer C.free(unsafe.Pointer(texCoordStr))
-	texStr := C.CString("u_texture")
-	defer C.free(unsafe.Pointer(texStr))
-	alphaStr := C.CString("u_alpha")
-	defer C.free(unsafe.Pointer(alphaStr))
-
-	// Create shader program
-	prog := compileProgram(vertexShaderSrc, fragmentShaderSrc)
-	r.shaderProgram = prog
-	r.attribPos = C.GLint(C.glGetAttribLocation(prog, posStr))
-	r.attribTex = C.GLint(C.glGetAttribLocation(prog, texCoordStr))
-	r.uniformTex = C.GLint(C.glGetUniformLocation(prog, texStr))
-	r.uniformAlpha = C.GLint(C.glGetUniformLocation(prog, alphaStr))
-
-	return r, nil
-}
-
 func createWLEGLWindow(surface *C.struct_wl_surface, width, height int) *C.struct_wl_egl_window {
 	eglWindow := C.wl_egl_window_create(surface, C.int(width), C.int(height))
 	if eglWindow == nil {
@@ -289,7 +300,80 @@ func initEGL(dpy *C.struct_wl_display, eglWindow *C.struct_wl_egl_window) (C.EGL
 	return eglDisplay, eglSurface, eglContext
 }
 
-func (r *wlRenderer) SetImage(img image.Image) error {
+// connectToDisplay handles all the display connection logic
+func (r *WLRenderer) connectToDisplay() error {
+	var err error
+
+	// 1. Connect to Wayland display
+	r.display, err = connectWaylandDisplay()
+	if err != nil {
+		return err
+	}
+
+	// 2. Set up registry
+	if err := setupRegistry(r); err != nil {
+		return err
+	}
+
+	// 3. Create surface
+	if r.compositor == nil {
+		return fmt.Errorf("failed to bind compositor interface")
+	}
+	r.surface = C.wl_compositor_create_surface(r.compositor)
+	if r.surface == nil {
+		return fmt.Errorf("failed to create surface")
+	}
+
+	// 4. Create layer surface
+	if err := createLayerSurface(r); err != nil {
+		return err
+	}
+
+	// 5. Set up EGL
+	width, height := r.configWidth, r.configHeight
+	if width == 0 {
+		width = 1
+	}
+	if height == 0 {
+		height = 1
+	}
+
+	log.Debugf("Creating EGL window with size %dx%d", width, height)
+	eglWindow := createWLEGLWindow(r.surface, width, height)
+	runtime.KeepAlive(eglWindow)
+	r.eglDisplay, r.eglSurface, r.eglContext = initEGL(r.display, eglWindow)
+
+	// Use the configured size for the renderer
+	r.width = width
+	r.height = height
+
+	// 6. Set up shader program
+	r.setupShaderProgram()
+
+	return nil
+}
+
+// setupShaderProgram creates and configures the GL shader program
+func (r *WLRenderer) setupShaderProgram() {
+	posStr := C.CString("a_position")
+	defer C.free(unsafe.Pointer(posStr))
+	texCoordStr := C.CString("a_texCoord")
+	defer C.free(unsafe.Pointer(texCoordStr))
+	texStr := C.CString("u_texture")
+	defer C.free(unsafe.Pointer(texStr))
+	alphaStr := C.CString("u_alpha")
+	defer C.free(unsafe.Pointer(alphaStr))
+
+	// Create shader program
+	prog := compileProgram(vertexShaderSrc, fragmentShaderSrc)
+	r.shaderProgram = prog
+	r.attribPos = C.GLint(C.glGetAttribLocation(prog, posStr))
+	r.attribTex = C.GLint(C.glGetAttribLocation(prog, texCoordStr))
+	r.uniformTex = C.GLint(C.glGetUniformLocation(prog, texStr))
+	r.uniformAlpha = C.GLint(C.glGetUniformLocation(prog, alphaStr))
+}
+
+func (r *WLRenderer) SetImage(img image.Image) error {
 	// Delete previous texture
 	if r.currentTex.id != 0 {
 		C.glDeleteTextures(1, &r.currentTex.id)
@@ -339,7 +423,16 @@ func (r *wlRenderer) SetImage(img image.Image) error {
 	return nil
 }
 
-func (r *wlRenderer) Transition(next image.Image, duration time.Duration) error {
+func (r *WLRenderer) Transition(next image.Image, duration time.Duration) error {
+	// If no blackTex, create a black texture
+	if r.blackTex.id == 0 {
+		blackTex, err := r.createColorTexture(0, 0, 0)
+		if err != nil {
+			return fmt.Errorf("failed to create black transition texture: %w", err)
+		}
+		r.blackTex = blackTex
+	}
+
 	// If no currentTex, fade from black
 	if r.currentTex.id == 0 {
 		blackTex, err := r.createColorTexture(0, 0, 0)
@@ -369,23 +462,28 @@ func (r *wlRenderer) Transition(next image.Image, duration time.Duration) error 
 
 	// Frame loop
 	for r.fading {
+		if !r.IsDisplayRunning() {
+			log.Info("Display connection lost, returning to main loop")
+			return fmt.Errorf("display connection lost in transition")
+		}
+
 		if err := r.Render(); err != nil {
-			return err
+			return fmt.Errorf("failed to render during transition: %w", err)
 		}
 	}
 
 	return nil
 }
 
-func applyEasing(mode render.EasingMode, t float32) float32 {
+func applyEasing(mode types.EasingMode, t float32) float32 {
 	switch mode {
-	case render.EasingLinear:
+	case types.EasingLinear:
 		return t
-	case render.EasingEaseIn:
+	case types.EasingEaseIn:
 		return t * t
-	case render.EasingEaseOut:
+	case types.EasingEaseOut:
 		return t * (2 - t)
-	case render.EasingEaseInOut:
+	case types.EasingEaseInOut:
 		if t < 0.5 {
 			return 2 * t * t
 		} else {
@@ -396,7 +494,15 @@ func applyEasing(mode render.EasingMode, t float32) float32 {
 	}
 }
 
-func (r *wlRenderer) Render() error {
+func (r *WLRenderer) Render() error {
+	if r.layerSurf == nil {
+		return fmt.Errorf("layer surface is nil")
+	}
+
+	// if t := C.wl_display_roundtrip(r.display); (t == -1) || (t == C.EGL_FALSE) {
+	// 	return fmt.Errorf("failed to roundtrip display")
+	// }
+
 	// Calculate alpha value
 	alpha := float32(1.0)
 	if r.fading {
@@ -434,30 +540,41 @@ func (r *wlRenderer) Render() error {
 	C.glClear(C.GL_COLOR_BUFFER_BIT)
 	C.glUseProgram(r.shaderProgram)
 
-	// Draw the main texture
-	if r.fading && alpha < 1.0 && r.currentTex.id != 0 {
-		// When fading, draw current texture with inverse alpha
-		C.glUniform1f(r.uniformAlpha, C.GLfloat(1.0-alpha))
+	if r.fading && r.currentTex.id != 0 {
+		// When fading, first draw current texture at full opacity (no fading)
+		C.glUniform1f(r.uniformAlpha, 1.0)
 		C.glActiveTexture(C.GL_TEXTURE0)
 		C.glBindTexture(C.GL_TEXTURE_2D, r.currentTex.id)
 		C.glUniform1i(r.uniformTex, 0)
 
 		// Draw the quad with the current texture
 		drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.currentTex.width), C.GLint(r.currentTex.height))
-	}
 
-	if r.fading && r.transitionTex.id != 0 {
-		// Draw the transition texture with alpha blending
+		// Enable blending for black texture and new texture
 		C.glEnable(C.GL_BLEND)
 		C.glBlendFunc(C.GL_SRC_ALPHA, C.GL_ONE_MINUS_SRC_ALPHA)
 
-		C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
-		C.glActiveTexture(C.GL_TEXTURE0)
-		C.glBindTexture(C.GL_TEXTURE_2D, r.transitionTex.id)
-		C.glUniform1i(r.uniformTex, 0)
+		// Draw black texture with increasing alpha
+		if r.blackTex.id != 0 {
+			C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
+			C.glActiveTexture(C.GL_TEXTURE0)
+			C.glBindTexture(C.GL_TEXTURE_2D, r.blackTex.id)
+			C.glUniform1i(r.uniformTex, 0)
 
-		// Draw the quad with the transition texture
-		drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.transitionTex.width), C.GLint(r.transitionTex.height))
+			// Draw the black quad (use stretch mode to cover entire screen)
+			drawTexturedQuad(r.width, r.height, types.ScalingModeStretch, r.attribPos, r.attribTex, C.GLint(r.width), C.GLint(r.height))
+		}
+
+		// Draw new texture with same alpha
+		if r.transitionTex.id != 0 {
+			C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
+			C.glActiveTexture(C.GL_TEXTURE0)
+			C.glBindTexture(C.GL_TEXTURE_2D, r.transitionTex.id)
+			C.glUniform1i(r.uniformTex, 0)
+
+			// Draw the transition texture with the same scaling mode as current texture
+			drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.transitionTex.width), C.GLint(r.transitionTex.height))
+		}
 
 		C.glDisable(C.GL_BLEND)
 	} else if r.currentTex.id != 0 {
@@ -474,6 +591,25 @@ func (r *wlRenderer) Render() error {
 	// Ensure all rendering is complete before swap
 	C.glFinish()
 
+	if r.layerSurf == nil || r.eglSurface == nil || r.eglDisplay == 0 {
+		log.Debug("Display disconnected")
+		return fmt.Errorf("display disconnected")
+	}
+
+	if C.eglGetError() != C.EGL_SUCCESS {
+		log.Debug("EGL error occurred")
+		return fmt.Errorf("EGL error occurred")
+	}
+
+	if C.glGetError() != C.GL_NO_ERROR {
+		log.Debug("OpenGL error occurred")
+		return fmt.Errorf("OpenGL error occurred")
+	}
+
+	if t := C.wl_display_roundtrip(r.display); (t == -1) || (t == C.EGL_FALSE) {
+		return fmt.Errorf("failed to roundtrip display")
+	}
+
 	// Swap buffers and wait for next frame
 	C.eglSwapBuffers(r.eglDisplay, r.eglSurface)
 	time.Sleep(time.Second / time.Duration(r.framerate))
@@ -481,11 +617,11 @@ func (r *wlRenderer) Render() error {
 	return nil
 }
 
-func (r *wlRenderer) GetSize() (int, int) {
+func (r *WLRenderer) GetSize() (int, int) {
 	return r.width, r.height
 }
 
-func (r *wlRenderer) Cleanup() {
+func (r *WLRenderer) Cleanup() {
 	// Delete GL textures
 	if r.currentTex.id != 0 {
 		C.glDeleteTextures(1, &r.currentTex.id)
@@ -494,6 +630,10 @@ func (r *wlRenderer) Cleanup() {
 	if r.transitionTex.id != 0 {
 		C.glDeleteTextures(1, &r.transitionTex.id)
 		r.transitionTex = texture{}
+	}
+	if r.blackTex.id != 0 {
+		C.glDeleteTextures(1, &r.blackTex.id)
+		r.blackTex = texture{}
 	}
 
 	// Delete shader program
@@ -532,21 +672,33 @@ func (r *wlRenderer) Cleanup() {
 		r.display = nil
 	}
 
-	r.registryHandle.Delete()
+	// this should not throw a panic, but it does
+	// r.registryHandle.Delete()
 }
 
-func (r *wlRenderer) IsDisplayRunning() bool {
-	if r.display == nil {
+// TryReconnect attempts to reconnect to the Wayland display after a disconnect
+func (r *WLRenderer) TryReconnect() error {
+	// Clean up any existing resources
+	r.Cleanup()
+
+	// Initialize a new config channel
+	r.configChan = make(chan struct{}, 1)
+
+	// Reconnect to display
+	return r.connectToDisplay()
+}
+
+func (r *WLRenderer) IsDisplayRunning() bool {
+	if r.layerSurf == nil || r.eglSurface == nil || r.eglDisplay == 0 {
+		log.Debug("Display disconnected, cleaning up...")
+		r.Cleanup()
 		return false
 	}
-	// Try a non-blocking roundtrip to check if display is still alive
-	if C.wl_display_roundtrip(r.display) < 0 {
-		return false
-	}
+
 	return true
 }
 
-func (r *wlRenderer) uploadImageToTexture(img image.Image) (C.GLuint, error) {
+func (r *WLRenderer) uploadImageToTexture(img image.Image) (C.GLuint, error) {
 	rgba, ok := img.(*image.RGBA)
 	if !ok {
 		tmp := image.NewRGBA(img.Bounds())
@@ -572,7 +724,7 @@ func (r *wlRenderer) uploadImageToTexture(img image.Image) (C.GLuint, error) {
 	return tex, nil
 }
 
-func (r *wlRenderer) createColorTexture(rVal, gVal, bVal uint8) (texture, error) {
+func (r *WLRenderer) createColorTexture(rVal, gVal, bVal uint8) (texture, error) {
 	const w, h = 2, 2
 	pix := make([]uint8, w*h*4)
 	for i := 0; i < len(pix); i += 4 {
@@ -666,48 +818,7 @@ func compileProgram(vsrc, fsrc string) C.GLuint {
 	return prog
 }
 
-//export goHandleLayerSurfaceConfigure
-func goHandleLayerSurfaceConfigure(handle C.uintptr_t, surface *C.struct_zwlr_layer_surface_v1,
-	serial C.uint32_t, width, height C.uint32_t) {
-	h := cgo.Handle(uintptr(handle))
-	r := h.Value().(*wlRenderer)
-	if r == nil {
-		log.Error("goHandleLayerSurfaceConfigure: nil renderer")
-		return
-	}
-
-	log.Debugf("Layer surface configured: width=%d, height=%d", width, height)
-
-	// Acknowledge the configure
-	C.zwlr_layer_surface_v1_ack_configure(surface, serial)
-
-	// Store the configuration
-	r.configWidth = int(width)
-	r.configHeight = int(height)
-	r.configured = true
-
-	// Signal that configuration is complete
-	select {
-	case r.configChan <- struct{}{}:
-	default:
-	}
-}
-
-//export goHandleLayerSurfaceClosed
-func goHandleLayerSurfaceClosed(handle C.uintptr_t, _ *C.struct_zwlr_layer_surface_v1) {
-	h := cgo.Handle(uintptr(handle))
-	r := h.Value().(*wlRenderer)
-	if r == nil {
-		log.Error("goHandleLayerSurfaceClosed: nil renderer")
-		return
-	}
-
-	log.Debug("Layer surface closed")
-	// Signal to close
-	close(r.configChan)
-}
-
-func drawTexturedQuad(screenWidth, screenHeight int, scaleMode render.ScalingMode, attribPos, attribTex C.GLint, texWidth, texHeight C.GLint) {
+func drawTexturedQuad(screenWidth, screenHeight int, scaleMode types.ScalingMode, attribPos, attribTex C.GLint, texWidth, texHeight C.GLint) {
 	// Default to full screen quad
 	var x1, y1, x2, y2 float32 = -1.0, -1.0, 1.0, 1.0
 
@@ -720,22 +831,22 @@ func drawTexturedQuad(screenWidth, screenHeight int, scaleMode render.ScalingMod
 
 	// Adjust coordinates based on scaling mode
 	switch scaleMode {
-	case render.ScalingModeStretch:
+	case types.ScalingModeStretch:
 		// Use full screen coordinates (already set)
 
-	case render.ScalingModeFitHorizontal:
+	case types.ScalingModeFitHorizontal:
 		// Keep width at 100%, adjust height to maintain texture aspect ratio
 		scaledHeight := 1.0 / (textureAspect / screenAspect)
 		y1 = -scaledHeight
 		y2 = scaledHeight
 
-	case render.ScalingModeFitVertical:
+	case types.ScalingModeFitVertical:
 		// Keep height at 100%, adjust width to maintain texture aspect ratio
 		scaledWidth := textureAspect / screenAspect
 		x1 = -scaledWidth
 		x2 = scaledWidth
 
-	case render.ScalingModeCenter:
+	case types.ScalingModeCenter:
 		fallthrough
 	default:
 		// "Fill" mode - use the smaller scaling factor to ensure no cropping

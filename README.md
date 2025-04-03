@@ -68,6 +68,15 @@ me know and I'll spend some time on it; its not impossible just irksome.
   next transition
 - Add cli commands to control the program
 
+## Known Issues
+
+Please check the Issues in Github for all issues. Major ones are:
+
+- Currently does not necessarily exit when the compositor or x11 shuts down. You
+  might need to issue a `smoothpaper stop` before you start it in case there's a
+  stale one running in the background. Your other option is to not use -b; if
+  the parent process dies in that case it should remove the daemon.
+
 ### TODO
 
 - Dynamically change the wallpapers directory (currently you have to restart the

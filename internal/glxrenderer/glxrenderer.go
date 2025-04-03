@@ -1,8 +1,8 @@
-package glxrender
+package glxrenderer
 
 /*
 #cgo LDFLAGS: -lGL -lX11 -lXrender -lva-glx
-#include "glxrender.h"
+#include "glxrenderer.h"
 */
 import "C"
 
@@ -16,12 +16,12 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/go-gl/gl/v2.1/gl"
-	"github.com/matjam/smoothpaper/internal/render"
+	"github.com/matjam/smoothpaper/internal/types"
 )
 
 // glxRenderer is the primary type that wraps the OpenGL context and X11 windowing.
 // It uses GLX to interface between OpenGL and the X11 system.
-type glxRenderer struct {
+type GLXRenderer struct {
 	display *C.Display   // C pointer to the X11 display connection
 	window  C.Window     // The X11 window used for rendering
 	context C.GLXContext // The OpenGL context used with GLX
@@ -35,14 +35,14 @@ type glxRenderer struct {
 	duration time.Duration // Duration of the transition
 	fading   bool          // Whether a transition is currently in progress
 
-	scaleMode  render.ScalingMode // How images should scale (stretch, fit, center, etc.)
-	easingMode render.EasingMode  // The easing function to apply to alpha blending
-	framerate  int                // Frame rate to maintain during rendering
+	scaleMode  types.ScalingMode // How images should scale (stretch, fit, center, etc.)
+	easingMode types.EasingMode  // The easing function to apply to alpha blending
+	framerate  int               // Frame rate to maintain during rendering
 }
 
 // NewRenderer initializes the GLX context, creates a fullscreen override-redirect X11 window,
 // and binds it to an OpenGL context so we can start rendering.
-func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate int) (render.Renderer, error) {
+func NewRenderer(scale types.ScalingMode, easing types.EasingMode, framerate int) (*GLXRenderer, error) {
 	runtime.LockOSThread() // Required: OpenGL contexts must be accessed from a single OS thread
 
 	dpy := C.open_display() // Calls XOpenDisplay(NULL), connects to X11 server using DISPLAY env var
@@ -73,7 +73,7 @@ func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate i
 	gl.Viewport(0, 0, int32(width), int32(height)) // Sets up the viewport to match the window size
 	gl.ClearColor(0.0, 0.0, 0.0, 1.0)              // Default clear color is opaque black
 
-	return &glxRenderer{
+	return &GLXRenderer{
 		display:    dpy,
 		window:     win,
 		context:    ctx,
@@ -86,7 +86,7 @@ func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate i
 }
 
 // SetRootPixmap reads pixels from the OpenGL backbuffer, flips vertically, and sets the root pixmap
-func (r *glxRenderer) SetRootPixmap() {
+func (r *GLXRenderer) SetRootPixmap() {
 	w, h := r.width, r.height
 	size := w * h * 4
 	buf := make([]byte, size)
@@ -105,12 +105,12 @@ func (r *glxRenderer) SetRootPixmap() {
 }
 
 // GetSize returns the dimensions of the rendering window.
-func (r *glxRenderer) GetSize() (int, int) {
+func (r *GLXRenderer) GetSize() (int, int) {
 	return r.width, r.height
 }
 
 // SetImage loads a new image into texA. Any existing texture is deleted first.
-func (r *glxRenderer) SetImage(img image.Image) error {
+func (r *GLXRenderer) SetImage(img image.Image) error {
 	if r.texA.id != 0 {
 		gl.DeleteTextures(1, &r.texA.id)
 	}
@@ -124,7 +124,7 @@ func (r *glxRenderer) SetImage(img image.Image) error {
 }
 
 // Transition sets up texB and blends it over texA for a specified duration using easing.
-func (r *glxRenderer) Transition(next image.Image, duration time.Duration) error {
+func (r *GLXRenderer) Transition(next image.Image, duration time.Duration) error {
 	if r.texA.id == 0 {
 		tex, err := r.createColorTexture(0, 0, 0)
 		if err != nil {
@@ -163,7 +163,7 @@ func (r *glxRenderer) Transition(next image.Image, duration time.Duration) error
 
 // Render the current image; this blocks for the given frame rate. Ideally, you do not
 // need to call this directly, as it is called in a loop by the renderer during Transition.
-func (r *glxRenderer) Render() error {
+func (r *GLXRenderer) Render() error {
 	alpha := float32(1.0)
 	if r.fading {
 		t := float32(time.Since(r.start).Seconds() / r.duration.Seconds())
@@ -201,7 +201,7 @@ type texture struct {
 }
 
 // createTexture takes a Go image.Image and turns it into an OpenGL texture.
-func (r *glxRenderer) createTexture(img image.Image) (texture, error) {
+func (r *GLXRenderer) createTexture(img image.Image) (texture, error) {
 	var tex texture
 	bounds := img.Bounds()
 	tex.width = bounds.Dx()
@@ -230,7 +230,7 @@ func (r *glxRenderer) createTexture(img image.Image) (texture, error) {
 	return tex, nil
 }
 
-func (r *glxRenderer) Cleanup() {
+func (r *GLXRenderer) Cleanup() {
 	if r.texA.id != 0 {
 		gl.DeleteTextures(1, &r.texA.id)
 	}
@@ -243,15 +243,15 @@ func (r *glxRenderer) Cleanup() {
 	C.XCloseDisplay(r.display)
 }
 
-func applyEasing(mode render.EasingMode, t float32) float32 {
+func applyEasing(mode types.EasingMode, t float32) float32 {
 	switch mode {
-	case render.EasingLinear:
+	case types.EasingLinear:
 		return t
-	case render.EasingEaseIn:
+	case types.EasingEaseIn:
 		return t * t
-	case render.EasingEaseOut:
+	case types.EasingEaseOut:
 		return t * (2 - t)
-	case render.EasingEaseInOut:
+	case types.EasingEaseInOut:
 		if t < 0.5 {
 			return 2 * t * t
 		} else {
@@ -262,7 +262,7 @@ func applyEasing(mode render.EasingMode, t float32) float32 {
 	}
 }
 
-func (r *glxRenderer) renderFade(alpha float32, texA, texB texture) {
+func (r *GLXRenderer) renderFade(alpha float32, texA, texB texture) {
 	gl.Clear(gl.COLOR_BUFFER_BIT)
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
@@ -281,7 +281,7 @@ func (r *glxRenderer) renderFade(alpha float32, texA, texB texture) {
 
 	gl.Disable(gl.BLEND)
 }
-func (r *glxRenderer) renderStatic(tex texture) {
+func (r *GLXRenderer) renderStatic(tex texture) {
 	if tex.id == 0 {
 		return
 	}
@@ -292,7 +292,7 @@ func (r *glxRenderer) renderStatic(tex texture) {
 	r.drawCenteredQuad(tex)
 }
 
-func (r *glxRenderer) drawCenteredQuad(tex texture) {
+func (r *GLXRenderer) drawCenteredQuad(tex texture) {
 	tw := float32(tex.width)
 	th := float32(tex.height)
 	sw := float32(r.width)
@@ -304,20 +304,20 @@ func (r *glxRenderer) drawCenteredQuad(tex texture) {
 	var hx, hy float32
 
 	switch r.scaleMode {
-	case render.ScalingModeStretch:
+	case types.ScalingModeStretch:
 		hx, hy = 1.0, 1.0
 
-	case render.ScalingModeFitHorizontal: // "horizontal"
+	case types.ScalingModeFitHorizontal: // "horizontal"
 		hx = 1.0
 		// height scaled proportionally to width
 		hy = (th / tw) * (sw / sh)
 
-	case render.ScalingModeFitVertical: // "vertical"
+	case types.ScalingModeFitVertical: // "vertical"
 		hy = 1.0
 		// width scaled proportionally to height
 		hx = (tw / th) * (sh / sw)
 
-	case render.ScalingModeCenter:
+	case types.ScalingModeCenter:
 		fallthrough
 	default:
 		// Fill as much as possible without cropping or stretching
@@ -359,7 +359,7 @@ func deleteTexture(tex *texture) {
 	}
 }
 
-func (r *glxRenderer) createColorTexture(rVal, gVal, bVal uint8) (*texture, error) {
+func (r *GLXRenderer) createColorTexture(rVal, gVal, bVal uint8) (*texture, error) {
 	const w, h = 2, 2           // Small but safe texture size
 	pix := make([]uint8, w*h*4) // RGBA
 
@@ -387,9 +387,14 @@ func (r *glxRenderer) createColorTexture(rVal, gVal, bVal uint8) (*texture, erro
 	return &tex, nil
 }
 
-func (r *glxRenderer) IsDisplayRunning() bool {
+func (r *GLXRenderer) IsDisplayRunning() bool {
 	if r.display == nil {
 		return false
 	}
 	return C.is_display_dead() == 0
+}
+
+func (r *GLXRenderer) TryReconnect() error {
+	log.Fatal("Unimplemented")
+	return nil
 }

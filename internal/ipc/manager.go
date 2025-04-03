@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
-	"github.com/matjam/smoothpaper/internal/glxrender"
-	"github.com/matjam/smoothpaper/internal/render"
+	"github.com/matjam/smoothpaper/internal/glxrenderer"
+	"github.com/matjam/smoothpaper/internal/types"
 	"github.com/matjam/smoothpaper/internal/wlrenderer"
 	"github.com/spf13/viper"
 )
@@ -18,21 +18,36 @@ import (
 type Manager struct {
 	sync.Mutex
 	wallpapers       []string // list of wallpaper paths\
-	renderer         render.Renderer
+	renderer         Renderer
 	cmds             chan Command
 	currentWallpaper string
 }
 
+// Renderer interface defines the methods that a renderer must implement to render
+// images as wallpapers, including setting the current image, transitioning to the next
+// image, rendering the current image, cleaning up resources, and getting the dimensions
+// of the window.
+type Renderer interface {
+	SetImage(image image.Image) error                          // Set the current image
+	Transition(next image.Image, duration time.Duration) error // Transition to the next image
+	Render() error                                             // Render the current image, called in a loop and will block for each frame
+	Cleanup()                                                  // Cleanup resources
+	GetSize() (int, int)                                       // Get the dimensions of the window
+	IsDisplayRunning() bool
+	TryReconnect() error
+}
+
+// NewManager creates a new wallpaper manager with the specified wallpapers.
 func NewManager(wallpapers []string) *Manager {
-	var renderer render.Renderer
+	var renderer Renderer
 	var err error
 
 	if os.Getenv("XDG_SESSION_TYPE") == "wayland" {
 		log.Info("Detected Wayland session")
 
 		renderer, err = wlrenderer.NewRenderer(
-			render.ScalingMode(viper.GetString("scale_mode")),
-			render.EasingMode(viper.GetString("easing")),
+			types.ScalingMode(viper.GetString("scale_mode")),
+			types.EasingMode(viper.GetString("easing")),
 			viper.GetInt("framerate_limit"),
 		)
 		if err != nil {
@@ -41,9 +56,9 @@ func NewManager(wallpapers []string) *Manager {
 	} else {
 		log.Info("Wayland not detected, assuming X11 session")
 
-		renderer, err = glxrender.NewRenderer(
-			render.ScalingMode(viper.GetString("scale_mode")),
-			render.EasingMode(viper.GetString("easing")),
+		renderer, err = glxrenderer.NewRenderer(
+			types.ScalingMode(viper.GetString("scale_mode")),
+			types.EasingMode(viper.GetString("easing")),
 			viper.GetInt("framerate_limit"),
 		)
 		if err != nil {
@@ -62,6 +77,12 @@ func (c *Manager) CurrentWallpaper() string {
 	c.Lock()
 	defer c.Unlock()
 	return c.currentWallpaper
+}
+
+func (c *Manager) SetCurrentWallpaper(wallpaper string) {
+	c.Lock()
+	defer c.Unlock()
+	c.currentWallpaper = wallpaper
 }
 
 func (c *Manager) Stop() {
@@ -119,7 +140,8 @@ func (c *Manager) Run() {
 	timeChanged := time.Now()
 
 	// Set the initial wallpaper
-	c.Next()
+	c.NextWallpaper()
+	c.SetCurrent()
 
 	delay := viper.GetInt("delay")
 	if delay == 0 {
@@ -161,14 +183,27 @@ func (c *Manager) Run() {
 
 		// Update the image so if the X server goes away and comes back the wallpaper
 		// will be set again
-		c.renderer.Render()
+		err := c.renderer.Render()
+		if err != nil {
+			log.Error("renderer.Render() failed:", err)
+		}
 
 		time.Sleep(500 * time.Millisecond)
 
 		if !c.renderer.IsDisplayRunning() {
-			log.Info("Display is not running, stopping wallpaper changer...")
-			running = false
-			continue
+			log.Info("Display connection lost, attempting to reconnect...")
+			time.Sleep(1 * time.Second) // Wait a bit before reconnecting
+			for {
+				err = c.renderer.TryReconnect()
+				if err == nil {
+					log.Info("Display connection re-established")
+					break
+				}
+				log.Debug("Failed to reconnect to display:", err)
+				time.Sleep(1 * time.Second) // Wait a bit before retrying
+			}
+			c.SetCurrent()
+			timeChanged = time.Now()
 		}
 	}
 
@@ -197,8 +232,29 @@ func (c *Manager) Next() {
 
 	err = c.renderer.Transition(nextImg, time.Duration(viper.GetInt("fade_speed"))*time.Second)
 	if err != nil {
-		log.Fatal("Failed to transition images:", err)
+		log.Errorf("Failed to transition images: %v", err)
 	}
+}
+
+func (c *Manager) SetCurrent() {
+	log.Infof("Setting current wallpaper: %s", c.CurrentWallpaper())
+	imgData, err := os.ReadFile(c.CurrentWallpaper())
+	if err != nil {
+		log.Error("Failed to read current image file:", err)
+		return
+	}
+	img, _, err := image.Decode(bytes.NewReader(imgData))
+	if err != nil {
+		log.Error("Failed to decode current image:", err)
+		return
+	}
+	err = c.renderer.SetImage(img)
+	if err != nil {
+		log.Error("Failed to set current image:", err)
+		return
+	}
+	log.Infof("Successfully set current wallpaper: %s", c.CurrentWallpaper())
+	c.renderer.Render()
 }
 
 func (c *Manager) EnqueueCommand(cmd Command) {
