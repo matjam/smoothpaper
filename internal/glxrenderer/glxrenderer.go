@@ -393,3 +393,8 @@ func (r *GLXRenderer) IsDisplayRunning() bool {
 	}
 	return C.is_display_dead() == 0
 }
+
+func (r *GLXRenderer) TryReconnect() error {
+	log.Fatal("Unimplemented")
+	return nil
+}

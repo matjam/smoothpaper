@@ -75,65 +75,9 @@ func NewRenderer(scale types.ScalingMode, easing types.EasingMode, framerate int
 		configChan: make(chan struct{}, 1),
 	}
 
-	var err error
-	r.display, err = connectWaylandDisplay()
-	if err != nil {
+	if err := r.connectToDisplay(); err != nil {
 		return nil, err
 	}
-
-	if err := setupRegistry(r); err != nil {
-		return nil, err
-	}
-
-	// Create the surface after the registry is set up
-	if r.compositor == nil {
-		return nil, fmt.Errorf("failed to bind compositor interface")
-	}
-
-	// Create a new surface from the compositor
-	r.surface = C.wl_compositor_create_surface(r.compositor)
-	if r.surface == nil {
-		return nil, fmt.Errorf("failed to create surface")
-	}
-
-	if err := createLayerSurface(r); err != nil {
-		return nil, err
-	}
-
-	// Now that the surface is configured, use the actual dimensions
-	width, height := r.configWidth, r.configHeight
-	if width == 0 {
-		width = 1
-	}
-	if height == 0 {
-		height = 1
-	}
-
-	log.Debugf("Creating EGL window with size %dx%d", width, height)
-	eglWindow := createWLEGLWindow(r.surface, width, height)
-	runtime.KeepAlive(eglWindow)
-	r.eglDisplay, r.eglSurface, r.eglContext = initEGL(r.display, eglWindow)
-
-	// Use the configured size for the renderer
-	r.width = width
-	r.height = height
-
-	posStr := C.CString("a_position")
-	defer C.free(unsafe.Pointer(posStr))
-	texCoordStr := C.CString("a_texCoord")
-	defer C.free(unsafe.Pointer(texCoordStr))
-	texStr := C.CString("u_texture")
-	defer C.free(unsafe.Pointer(texStr))
-	alphaStr := C.CString("u_alpha")
-	defer C.free(unsafe.Pointer(alphaStr))
-
-	// Create shader program
-	prog := compileProgram(vertexShaderSrc, fragmentShaderSrc)
-	r.shaderProgram = prog
-	r.attribPos = C.GLint(C.glGetAttribLocation(prog, posStr))
-	r.attribTex = C.GLint(C.glGetAttribLocation(prog, texCoordStr))
-	r.uniformTex = C.GLint(C.glGetUniformLocation(prog, texStr))
-	r.uniformAlpha = C.GLint(C.glGetUniformLocation(prog, alphaStr))
 
 	return r, nil
 }
@@ -157,6 +101,72 @@ func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.u
 		r.compositor = (*C.struct_wl_compositor)(C.wl_registry_bind(registry, name, &C.wl_compositor_interface, 1))
 		log.Debug("bound wl_compositor")
 	}
+}
+
+//export goHandleGlobalRemove
+func goHandleGlobalRemove(handle C.uintptr_t, _ *C.struct_wl_registry, name C.uint32_t) {
+	h := cgo.Handle(uintptr(handle))
+	r := h.Value().(*WLRenderer)
+	if r == nil {
+		log.Error("goHandleGlobalRemove: nil renderer")
+		return
+	}
+
+	log.Debugf("Global removed: name=%d", name)
+	// Check if this was a crucial interface and handle accordingly
+}
+
+//export goHandleLayerSurfaceConfigure
+func goHandleLayerSurfaceConfigure(handle C.uintptr_t, surface *C.struct_zwlr_layer_surface_v1,
+	serial C.uint32_t, width, height C.uint32_t) {
+	log.Debugf("goHandleLayerSurfaceConfigure: handle=%d, surface=%p, serial=%d, width=%d, height=%d",
+		handle, surface, serial, width, height)
+
+	h := cgo.Handle(uintptr(handle))
+	r := h.Value().(*WLRenderer)
+	if r == nil {
+		log.Error("goHandleLayerSurfaceConfigure: nil renderer")
+		return
+	}
+
+	log.Debugf("Layer surface configured: width=%d, height=%d", width, height)
+
+	// Acknowledge the configure
+	C.zwlr_layer_surface_v1_ack_configure(surface, serial)
+
+	// Store the configuration
+	r.configWidth = int(width)
+	r.configHeight = int(height)
+	r.configured = true
+
+	// Signal that configuration is complete
+	select {
+	case r.configChan <- struct{}{}:
+	default:
+	}
+}
+
+//export goHandleLayerSurfaceClosed
+func goHandleLayerSurfaceClosed(handle C.uintptr_t, _ *C.struct_zwlr_layer_surface_v1) {
+	log.Debugf("goHandleLayerSurfaceClosed: handle=%d", handle)
+
+	h := cgo.Handle(uintptr(handle))
+	r := h.Value().(*WLRenderer)
+	if r == nil {
+		log.Error("goHandleLayerSurfaceClosed: nil renderer")
+		return
+	}
+
+	log.Debug("Layer surface closed")
+	// Mark the layer surface as closed
+	r.layerSurf = nil
+	r.display = nil
+	r.configured = false
+	r.configWidth = 0
+	r.configHeight = 0
+	r.eglSurface = nil
+	r.eglContext = nil
+	r.eglDisplay = 0
 }
 
 func connectWaylandDisplay() (*C.struct_wl_display, error) {
@@ -290,6 +300,79 @@ func initEGL(dpy *C.struct_wl_display, eglWindow *C.struct_wl_egl_window) (C.EGL
 	return eglDisplay, eglSurface, eglContext
 }
 
+// connectToDisplay handles all the display connection logic
+func (r *WLRenderer) connectToDisplay() error {
+	var err error
+
+	// 1. Connect to Wayland display
+	r.display, err = connectWaylandDisplay()
+	if err != nil {
+		return err
+	}
+
+	// 2. Set up registry
+	if err := setupRegistry(r); err != nil {
+		return err
+	}
+
+	// 3. Create surface
+	if r.compositor == nil {
+		return fmt.Errorf("failed to bind compositor interface")
+	}
+	r.surface = C.wl_compositor_create_surface(r.compositor)
+	if r.surface == nil {
+		return fmt.Errorf("failed to create surface")
+	}
+
+	// 4. Create layer surface
+	if err := createLayerSurface(r); err != nil {
+		return err
+	}
+
+	// 5. Set up EGL
+	width, height := r.configWidth, r.configHeight
+	if width == 0 {
+		width = 1
+	}
+	if height == 0 {
+		height = 1
+	}
+
+	log.Debugf("Creating EGL window with size %dx%d", width, height)
+	eglWindow := createWLEGLWindow(r.surface, width, height)
+	runtime.KeepAlive(eglWindow)
+	r.eglDisplay, r.eglSurface, r.eglContext = initEGL(r.display, eglWindow)
+
+	// Use the configured size for the renderer
+	r.width = width
+	r.height = height
+
+	// 6. Set up shader program
+	r.setupShaderProgram()
+
+	return nil
+}
+
+// setupShaderProgram creates and configures the GL shader program
+func (r *WLRenderer) setupShaderProgram() {
+	posStr := C.CString("a_position")
+	defer C.free(unsafe.Pointer(posStr))
+	texCoordStr := C.CString("a_texCoord")
+	defer C.free(unsafe.Pointer(texCoordStr))
+	texStr := C.CString("u_texture")
+	defer C.free(unsafe.Pointer(texStr))
+	alphaStr := C.CString("u_alpha")
+	defer C.free(unsafe.Pointer(alphaStr))
+
+	// Create shader program
+	prog := compileProgram(vertexShaderSrc, fragmentShaderSrc)
+	r.shaderProgram = prog
+	r.attribPos = C.GLint(C.glGetAttribLocation(prog, posStr))
+	r.attribTex = C.GLint(C.glGetAttribLocation(prog, texCoordStr))
+	r.uniformTex = C.GLint(C.glGetUniformLocation(prog, texStr))
+	r.uniformAlpha = C.GLint(C.glGetUniformLocation(prog, alphaStr))
+}
+
 func (r *WLRenderer) SetImage(img image.Image) error {
 	// Delete previous texture
 	if r.currentTex.id != 0 {
@@ -379,8 +462,13 @@ func (r *WLRenderer) Transition(next image.Image, duration time.Duration) error 
 
 	// Frame loop
 	for r.fading {
+		if !r.IsDisplayRunning() {
+			log.Info("Display connection lost, returning to main loop")
+			return fmt.Errorf("display connection lost in transition")
+		}
+
 		if err := r.Render(); err != nil {
-			return err
+			return fmt.Errorf("failed to render during transition: %w", err)
 		}
 	}
 
@@ -407,6 +495,14 @@ func applyEasing(mode types.EasingMode, t float32) float32 {
 }
 
 func (r *WLRenderer) Render() error {
+	if r.layerSurf == nil {
+		return fmt.Errorf("layer surface is nil")
+	}
+
+	// if t := C.wl_display_roundtrip(r.display); (t == -1) || (t == C.EGL_FALSE) {
+	// 	return fmt.Errorf("failed to roundtrip display")
+	// }
+
 	// Calculate alpha value
 	alpha := float32(1.0)
 	if r.fading {
@@ -495,6 +591,25 @@ func (r *WLRenderer) Render() error {
 	// Ensure all rendering is complete before swap
 	C.glFinish()
 
+	if r.layerSurf == nil || r.eglSurface == nil || r.eglDisplay == 0 {
+		log.Debug("Display disconnected")
+		return fmt.Errorf("display disconnected")
+	}
+
+	if C.eglGetError() != C.EGL_SUCCESS {
+		log.Debug("EGL error occurred")
+		return fmt.Errorf("EGL error occurred")
+	}
+
+	if C.glGetError() != C.GL_NO_ERROR {
+		log.Debug("OpenGL error occurred")
+		return fmt.Errorf("OpenGL error occurred")
+	}
+
+	if t := C.wl_display_roundtrip(r.display); (t == -1) || (t == C.EGL_FALSE) {
+		return fmt.Errorf("failed to roundtrip display")
+	}
+
 	// Swap buffers and wait for next frame
 	C.eglSwapBuffers(r.eglDisplay, r.eglSurface)
 	time.Sleep(time.Second / time.Duration(r.framerate))
@@ -515,6 +630,10 @@ func (r *WLRenderer) Cleanup() {
 	if r.transitionTex.id != 0 {
 		C.glDeleteTextures(1, &r.transitionTex.id)
 		r.transitionTex = texture{}
+	}
+	if r.blackTex.id != 0 {
+		C.glDeleteTextures(1, &r.blackTex.id)
+		r.blackTex = texture{}
 	}
 
 	// Delete shader program
@@ -553,17 +672,29 @@ func (r *WLRenderer) Cleanup() {
 		r.display = nil
 	}
 
-	r.registryHandle.Delete()
+	// this should not throw a panic, but it does
+	// r.registryHandle.Delete()
+}
+
+// TryReconnect attempts to reconnect to the Wayland display after a disconnect
+func (r *WLRenderer) TryReconnect() error {
+	// Clean up any existing resources
+	r.Cleanup()
+
+	// Initialize a new config channel
+	r.configChan = make(chan struct{}, 1)
+
+	// Reconnect to display
+	return r.connectToDisplay()
 }
 
 func (r *WLRenderer) IsDisplayRunning() bool {
-	if r.display == nil {
+	if r.layerSurf == nil || r.eglSurface == nil || r.eglDisplay == 0 {
+		log.Debug("Display disconnected, cleaning up...")
+		r.Cleanup()
 		return false
 	}
-	// Try a non-blocking roundtrip to check if display is still alive
-	if C.wl_display_roundtrip(r.display) < 0 {
-		return false
-	}
+
 	return true
 }
 
@@ -685,47 +816,6 @@ func compileProgram(vsrc, fsrc string) C.GLuint {
 	C.glDeleteShader(fs)
 
 	return prog
-}
-
-//export goHandleLayerSurfaceConfigure
-func goHandleLayerSurfaceConfigure(handle C.uintptr_t, surface *C.struct_zwlr_layer_surface_v1,
-	serial C.uint32_t, width, height C.uint32_t) {
-	h := cgo.Handle(uintptr(handle))
-	r := h.Value().(*WLRenderer)
-	if r == nil {
-		log.Error("goHandleLayerSurfaceConfigure: nil renderer")
-		return
-	}
-
-	log.Debugf("Layer surface configured: width=%d, height=%d", width, height)
-
-	// Acknowledge the configure
-	C.zwlr_layer_surface_v1_ack_configure(surface, serial)
-
-	// Store the configuration
-	r.configWidth = int(width)
-	r.configHeight = int(height)
-	r.configured = true
-
-	// Signal that configuration is complete
-	select {
-	case r.configChan <- struct{}{}:
-	default:
-	}
-}
-
-//export goHandleLayerSurfaceClosed
-func goHandleLayerSurfaceClosed(handle C.uintptr_t, _ *C.struct_zwlr_layer_surface_v1) {
-	h := cgo.Handle(uintptr(handle))
-	r := h.Value().(*WLRenderer)
-	if r == nil {
-		log.Error("goHandleLayerSurfaceClosed: nil renderer")
-		return
-	}
-
-	log.Debug("Layer surface closed")
-	// Signal to close
-	close(r.configChan)
 }
 
 func drawTexturedQuad(screenWidth, screenHeight int, scaleMode types.ScalingMode, attribPos, attribTex C.GLint, texWidth, texHeight C.GLint) {

@@ -5,10 +5,14 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug smoothpaper",
-            "type": "lldb",
+            "name": "smoothpaper",
+            "type": "go",
             "request": "launch",
-            "program": "${workspaceFolder}/build/DEBUG/smoothpaper"
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/smoothpaper/smoothpaper.go",
+            "args": [
+                "--debug"
+            ],
         }
     ]
 }

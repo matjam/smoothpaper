@@ -20,9 +20,17 @@ shimHandleGlobal(void *data, struct wl_registry *registry, uint32_t name, const 
     goHandleGlobal((uintptr_t)data, registry, name, (char *)interface, version);
 }
 
+// After the goHandleGlobal forward declaration, add:
+extern void goHandleGlobalRemove(uintptr_t handle, struct wl_registry *registry, uint32_t name);
+
+// Add this C shim function:
+static void shimHandleGlobalRemove(void *data, struct wl_registry *registry, uint32_t name) {
+    goHandleGlobalRemove((uintptr_t)data, registry, name);
+}
+
 static const struct wl_registry_listener registry_listener = {
     .global        = shimHandleGlobal,
-    .global_remove = NULL,
+    .global_remove = shimHandleGlobalRemove,
 };
 
 static inline const struct wl_registry_listener *get_registry_listener() { return &registry_listener; }
