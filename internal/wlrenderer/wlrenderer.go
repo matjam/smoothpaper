@@ -16,7 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/charmbracelet/log"
-	"github.com/matjam/smoothpaper/internal/render"
+	"github.com/matjam/smoothpaper/internal/types"
 )
 
 type texture struct {
@@ -24,11 +24,11 @@ type texture struct {
 	width, height int
 }
 
-type wlRenderer struct {
+type WLRenderer struct {
 	width      int
 	height     int
-	scaleMode  render.ScalingMode
-	easingMode render.EasingMode
+	scaleMode  types.ScalingMode
+	easingMode types.EasingMode
 	framerate  int
 
 	// Wayland core
@@ -64,111 +64,10 @@ type wlRenderer struct {
 	configChan   chan struct{}
 }
 
-//export goHandleGlobal
-func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.uint32_t, iface *C.char, _ C.uint32_t) {
-	h := cgo.Handle(uintptr(handle))
-	r := h.Value().(*wlRenderer)
-	if r == nil {
-		log.Error("goHandleGlobal: nil renderer")
-		return
-	}
-
-	goIface := C.GoString(iface)
-
-	switch goIface {
-	case "zwlr_layer_shell_v1":
-		r.layerShell = (*C.struct_zwlr_layer_shell_v1)(C.wl_registry_bind(registry, name, &C.zwlr_layer_shell_v1_interface, 1))
-		log.Debug("bound zwlr_layer_shell_v1")
-	case "wl_compositor":
-		r.compositor = (*C.struct_wl_compositor)(C.wl_registry_bind(registry, name, &C.wl_compositor_interface, 1))
-		log.Debug("bound wl_compositor")
-	}
-}
-
-func connectWaylandDisplay() (*C.struct_wl_display, error) {
-	display := C.connect_wayland_display()
-	if display == nil {
-		return nil, fmt.Errorf("failed to connect to Wayland display")
-	}
-	return display, nil
-}
-
-func setupRegistry(r *wlRenderer) error {
-	r.registry = C.wl_display_get_registry(r.display)
-	if r.registry == nil {
-		return fmt.Errorf("failed to get Wayland registry")
-	}
-	handle := cgo.NewHandle(r)
-	r.registryHandle = handle
-	C.wl_registry_add_listener(r.registry, C.get_registry_listener(), unsafe.Pointer(uintptr(handle)))
-	C.wl_display_roundtrip(r.display)
-	C.wl_display_roundtrip(r.display)
-	runtime.KeepAlive(r)
-	return nil
-}
-
-func createLayerSurface(r *wlRenderer) error {
-	if r.layerShell == nil || r.surface == nil {
-		return fmt.Errorf("required layer-shell or surface not available")
-	}
-
-	// Initialize configChan if not already done
-	if r.configChan == nil {
-		r.configChan = make(chan struct{}, 1)
-	}
-
-	output := (*C.struct_wl_output)(nil)
-	layer := C.uint32_t(C.ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
-	namespace := C.CString("smoothpaper")
-	defer C.free(unsafe.Pointer(namespace))
-
-	// First create the layer surface
-	r.layerSurf = C.zwlr_layer_shell_v1_get_layer_surface(
-		r.layerShell, r.surface, output, layer, namespace,
-	)
-	if r.layerSurf == nil {
-		return fmt.Errorf("failed to create layer surface")
-	}
-
-	// Then add the listener to get configure events
-	C.zwlr_layer_surface_v1_add_listener(r.layerSurf, C.get_layer_surface_listener(), unsafe.Pointer(uintptr(r.registryHandle)))
-
-	// Set surface properties
-	C.zwlr_layer_surface_v1_set_anchor(r.layerSurf,
-		C.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP|
-			C.ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM|
-			C.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT|
-			C.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)
-
-	C.zwlr_layer_surface_v1_set_exclusive_zone(r.layerSurf, -1)
-	C.zwlr_layer_surface_v1_set_size(r.layerSurf, 0, 0)
-	C.zwlr_layer_surface_v1_set_keyboard_interactivity(r.layerSurf, 0)
-	C.zwlr_layer_surface_v1_set_margin(r.layerSurf, 0, 0, 0, 0)
-
-	log.Debugf("r.surface = %p", r.surface)
-
-	// Commit the surface to request the initial configure event
-	C.wl_surface_commit(r.surface)
-
-	// First roundtrip to ensure events are processed
-	C.wl_display_roundtrip(r.display)
-
-	// Wait for the surface to be configured
-	log.Debug("Waiting for layer surface configure...")
-	select {
-	case <-r.configChan:
-		log.Debugf("Layer surface configured: width=%d, height=%d", r.configWidth, r.configHeight)
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("timeout waiting for layer surface configure")
-	}
-
-	return nil
-}
-
-func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate int) (render.Renderer, error) {
+func NewRenderer(scale types.ScalingMode, easing types.EasingMode, framerate int) (*WLRenderer, error) {
 	runtime.LockOSThread() // Required: OpenGL contexts must be accessed from a single OS thread
 
-	r := &wlRenderer{
+	r := &WLRenderer{
 		scaleMode:  scale,
 		easingMode: easing,
 		framerate:  framerate,
@@ -238,6 +137,107 @@ func NewRenderer(scale render.ScalingMode, easing render.EasingMode, framerate i
 	return r, nil
 }
 
+//export goHandleGlobal
+func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.uint32_t, iface *C.char, _ C.uint32_t) {
+	h := cgo.Handle(uintptr(handle))
+	r := h.Value().(*WLRenderer)
+	if r == nil {
+		log.Error("goHandleGlobal: nil renderer")
+		return
+	}
+
+	goIface := C.GoString(iface)
+
+	switch goIface {
+	case "zwlr_layer_shell_v1":
+		r.layerShell = (*C.struct_zwlr_layer_shell_v1)(C.wl_registry_bind(registry, name, &C.zwlr_layer_shell_v1_interface, 1))
+		log.Debug("bound zwlr_layer_shell_v1")
+	case "wl_compositor":
+		r.compositor = (*C.struct_wl_compositor)(C.wl_registry_bind(registry, name, &C.wl_compositor_interface, 1))
+		log.Debug("bound wl_compositor")
+	}
+}
+
+func connectWaylandDisplay() (*C.struct_wl_display, error) {
+	display := C.connect_wayland_display()
+	if display == nil {
+		return nil, fmt.Errorf("failed to connect to Wayland display")
+	}
+	return display, nil
+}
+
+func setupRegistry(r *WLRenderer) error {
+	r.registry = C.wl_display_get_registry(r.display)
+	if r.registry == nil {
+		return fmt.Errorf("failed to get Wayland registry")
+	}
+	handle := cgo.NewHandle(r)
+	r.registryHandle = handle
+	C.wl_registry_add_listener(r.registry, C.get_registry_listener(), unsafe.Pointer(uintptr(handle)))
+	C.wl_display_roundtrip(r.display)
+	C.wl_display_roundtrip(r.display)
+	runtime.KeepAlive(r)
+	return nil
+}
+
+func createLayerSurface(r *WLRenderer) error {
+	if r.layerShell == nil || r.surface == nil {
+		return fmt.Errorf("required layer-shell or surface not available")
+	}
+
+	// Initialize configChan if not already done
+	if r.configChan == nil {
+		r.configChan = make(chan struct{}, 1)
+	}
+
+	output := (*C.struct_wl_output)(nil)
+	layer := C.uint32_t(C.ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
+	namespace := C.CString("smoothpaper")
+	defer C.free(unsafe.Pointer(namespace))
+
+	// First create the layer surface
+	r.layerSurf = C.zwlr_layer_shell_v1_get_layer_surface(
+		r.layerShell, r.surface, output, layer, namespace,
+	)
+	if r.layerSurf == nil {
+		return fmt.Errorf("failed to create layer surface")
+	}
+
+	// Then add the listener to get configure events
+	C.zwlr_layer_surface_v1_add_listener(r.layerSurf, C.get_layer_surface_listener(), unsafe.Pointer(uintptr(r.registryHandle)))
+
+	// Set surface properties
+	C.zwlr_layer_surface_v1_set_anchor(r.layerSurf,
+		C.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP|
+			C.ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM|
+			C.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT|
+			C.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)
+
+	C.zwlr_layer_surface_v1_set_exclusive_zone(r.layerSurf, -1)
+	C.zwlr_layer_surface_v1_set_size(r.layerSurf, 0, 0)
+	C.zwlr_layer_surface_v1_set_keyboard_interactivity(r.layerSurf, 0)
+	C.zwlr_layer_surface_v1_set_margin(r.layerSurf, 0, 0, 0, 0)
+
+	log.Debugf("r.surface = %p", r.surface)
+
+	// Commit the surface to request the initial configure event
+	C.wl_surface_commit(r.surface)
+
+	// First roundtrip to ensure events are processed
+	C.wl_display_roundtrip(r.display)
+
+	// Wait for the surface to be configured
+	log.Debug("Waiting for layer surface configure...")
+	select {
+	case <-r.configChan:
+		log.Debugf("Layer surface configured: width=%d, height=%d", r.configWidth, r.configHeight)
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("timeout waiting for layer surface configure")
+	}
+
+	return nil
+}
+
 func createWLEGLWindow(surface *C.struct_wl_surface, width, height int) *C.struct_wl_egl_window {
 	eglWindow := C.wl_egl_window_create(surface, C.int(width), C.int(height))
 	if eglWindow == nil {
@@ -289,7 +289,7 @@ func initEGL(dpy *C.struct_wl_display, eglWindow *C.struct_wl_egl_window) (C.EGL
 	return eglDisplay, eglSurface, eglContext
 }
 
-func (r *wlRenderer) SetImage(img image.Image) error {
+func (r *WLRenderer) SetImage(img image.Image) error {
 	// Delete previous texture
 	if r.currentTex.id != 0 {
 		C.glDeleteTextures(1, &r.currentTex.id)
@@ -339,7 +339,7 @@ func (r *wlRenderer) SetImage(img image.Image) error {
 	return nil
 }
 
-func (r *wlRenderer) Transition(next image.Image, duration time.Duration) error {
+func (r *WLRenderer) Transition(next image.Image, duration time.Duration) error {
 	// If no currentTex, fade from black
 	if r.currentTex.id == 0 {
 		blackTex, err := r.createColorTexture(0, 0, 0)
@@ -377,15 +377,15 @@ func (r *wlRenderer) Transition(next image.Image, duration time.Duration) error 
 	return nil
 }
 
-func applyEasing(mode render.EasingMode, t float32) float32 {
+func applyEasing(mode types.EasingMode, t float32) float32 {
 	switch mode {
-	case render.EasingLinear:
+	case types.EasingLinear:
 		return t
-	case render.EasingEaseIn:
+	case types.EasingEaseIn:
 		return t * t
-	case render.EasingEaseOut:
+	case types.EasingEaseOut:
 		return t * (2 - t)
-	case render.EasingEaseInOut:
+	case types.EasingEaseInOut:
 		if t < 0.5 {
 			return 2 * t * t
 		} else {
@@ -396,7 +396,7 @@ func applyEasing(mode render.EasingMode, t float32) float32 {
 	}
 }
 
-func (r *wlRenderer) Render() error {
+func (r *WLRenderer) Render() error {
 	// Calculate alpha value
 	alpha := float32(1.0)
 	if r.fading {
@@ -481,11 +481,11 @@ func (r *wlRenderer) Render() error {
 	return nil
 }
 
-func (r *wlRenderer) GetSize() (int, int) {
+func (r *WLRenderer) GetSize() (int, int) {
 	return r.width, r.height
 }
 
-func (r *wlRenderer) Cleanup() {
+func (r *WLRenderer) Cleanup() {
 	// Delete GL textures
 	if r.currentTex.id != 0 {
 		C.glDeleteTextures(1, &r.currentTex.id)
@@ -535,7 +535,7 @@ func (r *wlRenderer) Cleanup() {
 	r.registryHandle.Delete()
 }
 
-func (r *wlRenderer) IsDisplayRunning() bool {
+func (r *WLRenderer) IsDisplayRunning() bool {
 	if r.display == nil {
 		return false
 	}
@@ -546,7 +546,7 @@ func (r *wlRenderer) IsDisplayRunning() bool {
 	return true
 }
 
-func (r *wlRenderer) uploadImageToTexture(img image.Image) (C.GLuint, error) {
+func (r *WLRenderer) uploadImageToTexture(img image.Image) (C.GLuint, error) {
 	rgba, ok := img.(*image.RGBA)
 	if !ok {
 		tmp := image.NewRGBA(img.Bounds())
@@ -572,7 +572,7 @@ func (r *wlRenderer) uploadImageToTexture(img image.Image) (C.GLuint, error) {
 	return tex, nil
 }
 
-func (r *wlRenderer) createColorTexture(rVal, gVal, bVal uint8) (texture, error) {
+func (r *WLRenderer) createColorTexture(rVal, gVal, bVal uint8) (texture, error) {
 	const w, h = 2, 2
 	pix := make([]uint8, w*h*4)
 	for i := 0; i < len(pix); i += 4 {
@@ -670,7 +670,7 @@ func compileProgram(vsrc, fsrc string) C.GLuint {
 func goHandleLayerSurfaceConfigure(handle C.uintptr_t, surface *C.struct_zwlr_layer_surface_v1,
 	serial C.uint32_t, width, height C.uint32_t) {
 	h := cgo.Handle(uintptr(handle))
-	r := h.Value().(*wlRenderer)
+	r := h.Value().(*WLRenderer)
 	if r == nil {
 		log.Error("goHandleLayerSurfaceConfigure: nil renderer")
 		return
@@ -696,7 +696,7 @@ func goHandleLayerSurfaceConfigure(handle C.uintptr_t, surface *C.struct_zwlr_la
 //export goHandleLayerSurfaceClosed
 func goHandleLayerSurfaceClosed(handle C.uintptr_t, _ *C.struct_zwlr_layer_surface_v1) {
 	h := cgo.Handle(uintptr(handle))
-	r := h.Value().(*wlRenderer)
+	r := h.Value().(*WLRenderer)
 	if r == nil {
 		log.Error("goHandleLayerSurfaceClosed: nil renderer")
 		return
@@ -707,7 +707,7 @@ func goHandleLayerSurfaceClosed(handle C.uintptr_t, _ *C.struct_zwlr_layer_surfa
 	close(r.configChan)
 }
 
-func drawTexturedQuad(screenWidth, screenHeight int, scaleMode render.ScalingMode, attribPos, attribTex C.GLint, texWidth, texHeight C.GLint) {
+func drawTexturedQuad(screenWidth, screenHeight int, scaleMode types.ScalingMode, attribPos, attribTex C.GLint, texWidth, texHeight C.GLint) {
 	// Default to full screen quad
 	var x1, y1, x2, y2 float32 = -1.0, -1.0, 1.0, 1.0
 
@@ -720,22 +720,22 @@ func drawTexturedQuad(screenWidth, screenHeight int, scaleMode render.ScalingMod
 
 	// Adjust coordinates based on scaling mode
 	switch scaleMode {
-	case render.ScalingModeStretch:
+	case types.ScalingModeStretch:
 		// Use full screen coordinates (already set)
 
-	case render.ScalingModeFitHorizontal:
+	case types.ScalingModeFitHorizontal:
 		// Keep width at 100%, adjust height to maintain texture aspect ratio
 		scaledHeight := 1.0 / (textureAspect / screenAspect)
 		y1 = -scaledHeight
 		y2 = scaledHeight
 
-	case render.ScalingModeFitVertical:
+	case types.ScalingModeFitVertical:
 		// Keep height at 100%, adjust width to maintain texture aspect ratio
 		scaledWidth := textureAspect / screenAspect
 		x1 = -scaledWidth
 		x2 = scaledWidth
 
-	case render.ScalingModeCenter:
+	case types.ScalingModeCenter:
 		fallthrough
 	default:
 		// "Fill" mode - use the smaller scaling factor to ensure no cropping

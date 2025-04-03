@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
-	"github.com/matjam/smoothpaper/internal/glxrender"
-	"github.com/matjam/smoothpaper/internal/render"
+	"github.com/matjam/smoothpaper/internal/glxrenderer"
+	"github.com/matjam/smoothpaper/internal/types"
 	"github.com/matjam/smoothpaper/internal/wlrenderer"
 	"github.com/spf13/viper"
 )
@@ -18,21 +18,35 @@ import (
 type Manager struct {
 	sync.Mutex
 	wallpapers       []string // list of wallpaper paths\
-	renderer         render.Renderer
+	renderer         Renderer
 	cmds             chan Command
 	currentWallpaper string
 }
 
+// Renderer interface defines the methods that a renderer must implement to render
+// images as wallpapers, including setting the current image, transitioning to the next
+// image, rendering the current image, cleaning up resources, and getting the dimensions
+// of the window.
+type Renderer interface {
+	SetImage(image image.Image) error                          // Set the current image
+	Transition(next image.Image, duration time.Duration) error // Transition to the next image
+	Render() error                                             // Render the current image, called in a loop and will block for each frame
+	Cleanup()                                                  // Cleanup resources
+	GetSize() (int, int)                                       // Get the dimensions of the window
+	IsDisplayRunning() bool
+}
+
+// NewManager creates a new wallpaper manager with the specified wallpapers.
 func NewManager(wallpapers []string) *Manager {
-	var renderer render.Renderer
+	var renderer Renderer
 	var err error
 
 	if os.Getenv("XDG_SESSION_TYPE") == "wayland" {
 		log.Info("Detected Wayland session")
 
 		renderer, err = wlrenderer.NewRenderer(
-			render.ScalingMode(viper.GetString("scale_mode")),
-			render.EasingMode(viper.GetString("easing")),
+			types.ScalingMode(viper.GetString("scale_mode")),
+			types.EasingMode(viper.GetString("easing")),
 			viper.GetInt("framerate_limit"),
 		)
 		if err != nil {
@@ -41,9 +55,9 @@ func NewManager(wallpapers []string) *Manager {
 	} else {
 		log.Info("Wayland not detected, assuming X11 session")
 
-		renderer, err = glxrender.NewRenderer(
-			render.ScalingMode(viper.GetString("scale_mode")),
-			render.EasingMode(viper.GetString("easing")),
+		renderer, err = glxrenderer.NewRenderer(
+			types.ScalingMode(viper.GetString("scale_mode")),
+			types.EasingMode(viper.GetString("easing")),
 			viper.GetInt("framerate_limit"),
 		)
 		if err != nil {
