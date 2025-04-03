@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.1](https://github.com/matjam/smoothpaper/compare/v2.4.0...v2.4.1) (2025-04-03)
+
+
+### Bug Fixes
+
+* transitioning between a larger to smaller image no longer shows the larger image under the smaller one ([e38e3e8](https://github.com/matjam/smoothpaper/commit/e38e3e824f30e0a82cfd3ff9d62e436664733445))
+* wallpaper reconnects to wayland compositor after display exits ([1b5f776](https://github.com/matjam/smoothpaper/commit/1b5f77624e2baa25ceb8bfada1fe3fbf1e573945))
+
 ## [2.4.0](https://github.com/matjam/smoothpaper/compare/v2.3.0...v2.4.0) (2025-04-02)
 
 
