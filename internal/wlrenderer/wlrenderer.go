@@ -43,6 +43,7 @@ type WLRenderer struct {
 
 	currentTex    texture
 	transitionTex texture
+	blackTex      texture
 
 	start    time.Time
 	duration time.Duration
@@ -340,6 +341,15 @@ func (r *WLRenderer) SetImage(img image.Image) error {
 }
 
 func (r *WLRenderer) Transition(next image.Image, duration time.Duration) error {
+	// If no blackTex, create a black texture
+	if r.blackTex.id == 0 {
+		blackTex, err := r.createColorTexture(0, 0, 0)
+		if err != nil {
+			return fmt.Errorf("failed to create black transition texture: %w", err)
+		}
+		r.blackTex = blackTex
+	}
+
 	// If no currentTex, fade from black
 	if r.currentTex.id == 0 {
 		blackTex, err := r.createColorTexture(0, 0, 0)
@@ -434,30 +444,41 @@ func (r *WLRenderer) Render() error {
 	C.glClear(C.GL_COLOR_BUFFER_BIT)
 	C.glUseProgram(r.shaderProgram)
 
-	// Draw the main texture
-	if r.fading && alpha < 1.0 && r.currentTex.id != 0 {
-		// When fading, draw current texture with inverse alpha
-		C.glUniform1f(r.uniformAlpha, C.GLfloat(1.0-alpha))
+	if r.fading && r.currentTex.id != 0 {
+		// When fading, first draw current texture at full opacity (no fading)
+		C.glUniform1f(r.uniformAlpha, 1.0)
 		C.glActiveTexture(C.GL_TEXTURE0)
 		C.glBindTexture(C.GL_TEXTURE_2D, r.currentTex.id)
 		C.glUniform1i(r.uniformTex, 0)
 
 		// Draw the quad with the current texture
 		drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.currentTex.width), C.GLint(r.currentTex.height))
-	}
 
-	if r.fading && r.transitionTex.id != 0 {
-		// Draw the transition texture with alpha blending
+		// Enable blending for black texture and new texture
 		C.glEnable(C.GL_BLEND)
 		C.glBlendFunc(C.GL_SRC_ALPHA, C.GL_ONE_MINUS_SRC_ALPHA)
 
-		C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
-		C.glActiveTexture(C.GL_TEXTURE0)
-		C.glBindTexture(C.GL_TEXTURE_2D, r.transitionTex.id)
-		C.glUniform1i(r.uniformTex, 0)
+		// Draw black texture with increasing alpha
+		if r.blackTex.id != 0 {
+			C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
+			C.glActiveTexture(C.GL_TEXTURE0)
+			C.glBindTexture(C.GL_TEXTURE_2D, r.blackTex.id)
+			C.glUniform1i(r.uniformTex, 0)
 
-		// Draw the quad with the transition texture
-		drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.transitionTex.width), C.GLint(r.transitionTex.height))
+			// Draw the black quad (use stretch mode to cover entire screen)
+			drawTexturedQuad(r.width, r.height, types.ScalingModeStretch, r.attribPos, r.attribTex, C.GLint(r.width), C.GLint(r.height))
+		}
+
+		// Draw new texture with same alpha
+		if r.transitionTex.id != 0 {
+			C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
+			C.glActiveTexture(C.GL_TEXTURE0)
+			C.glBindTexture(C.GL_TEXTURE_2D, r.transitionTex.id)
+			C.glUniform1i(r.uniformTex, 0)
+
+			// Draw the transition texture with the same scaling mode as current texture
+			drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.transitionTex.width), C.GLint(r.transitionTex.height))
+		}
 
 		C.glDisable(C.GL_BLEND)
 	} else if r.currentTex.id != 0 {
