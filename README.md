@@ -67,6 +67,8 @@ me know and I'll spend some time on it; its not impossible just irksome.
 - Set a specific wallpaper immediately via command line without waiting for the
   next transition
 - Add cli commands to control the program
+- Supports multiple monitors on Wayland, tested with Hyprland,
+  will recover when displays are removed/added.
 
 ## Known Issues
 
@@ -81,7 +83,6 @@ Please check the Issues in Github for all issues. Major ones are:
 
 - Dynamically change the wallpapers directory (currently you have to restart the
   program to change the directory)
-- Set the wallpaper for all screens in a multi-monitor setup
 - Add a task bar icon to control the program
 - More cool transitions?
 
@@ -89,9 +90,8 @@ If you have any feature requests, please open an issue.
 
 ## Limitations
 
-- Does not work on multi-monitor setups as it currently finds the first screen
-  and sets the wallpaper for that screen only. Should be easy to fix, but I
-  don't have a multi-monitor setup to test with.
+- Multimonitor only works for Wayland as I have not bothered to implement support
+  in X11 as I don't use it anymore.
 - Any X11 Window Manager that renders to the desktop will have problems. I think
   its because I am creating a layer just above the bottom layer or something
   like that.
@@ -120,7 +120,7 @@ that.
 
 ## Building
 
-You will need to install g 1.24.1 to build this project. Go is included in the
+You will need to install g 1.25.1 to build this project. Go is included in the
 Arch repositories, and you can also just download a tarball and shove it in your
 path from https://go.dev/doc/install.
 
