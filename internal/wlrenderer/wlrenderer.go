@@ -3,6 +3,8 @@ package wlrenderer
 /*
 #cgo LDFLAGS: -lwayland-client -lwayland-egl -lEGL -lGLESv2
 #include "wlrenderer.h"
+// Forward declare wl_output_interface so we can bind outputs without including extra headers here
+extern const struct wl_interface wl_output_interface;
 */
 import "C"
 
@@ -37,9 +39,15 @@ type WLRenderer struct {
 	surface    *C.struct_wl_surface
 	layerSurf  *C.struct_zwlr_layer_surface_v1
 	layerShell *C.struct_zwlr_layer_shell_v1
+	compositor *C.struct_wl_compositor
+	// protocol version negotiated when binding wl_compositor
+	compositorVersion int
+
+	// EGL (shared display/context; per-output surfaces)
 	eglDisplay C.EGLDisplay
 	eglContext C.EGLContext
-	eglSurface C.EGLSurface
+	eglSurface C.EGLSurface // kept for backward compatibility, unused in multi-output path
+	eglConfig  C.EGLConfig
 
 	currentTex    texture
 	transitionTex texture
@@ -57,13 +65,34 @@ type WLRenderer struct {
 
 	registryHandle cgo.Handle
 
-	compositor *C.struct_wl_compositor
-
 	configured   bool
 	configWidth  int
 	configHeight int
 	configChan   chan struct{}
+
+	// Output change detection
+	outputsDirty bool
+	initialized  bool
+
+	// Per-output
+	outputs map[uint32]*outputSurface
 }
+
+type outputSurface struct {
+	id         uint32
+	output     *C.struct_wl_output
+	surface    *C.struct_wl_surface
+	layerSurf  *C.struct_zwlr_layer_surface_v1
+	eglWindow  *C.struct_wl_egl_window
+	eglSurface C.EGLSurface
+	configured bool
+	width      int
+	height     int
+	scale      int
+	configChan chan struct{}
+}
+
+// removed per-output helpers (not used in single-surface reconnect strategy)
 
 func NewRenderer(scale types.ScalingMode, easing types.EasingMode, framerate int) (*WLRenderer, error) {
 	runtime.LockOSThread() // Required: OpenGL contexts must be accessed from a single OS thread
@@ -73,6 +102,7 @@ func NewRenderer(scale types.ScalingMode, easing types.EasingMode, framerate int
 		easingMode: easing,
 		framerate:  framerate,
 		configChan: make(chan struct{}, 1),
+		outputs:    make(map[uint32]*outputSurface),
 	}
 
 	if err := r.connectToDisplay(); err != nil {
@@ -83,7 +113,7 @@ func NewRenderer(scale types.ScalingMode, easing types.EasingMode, framerate int
 }
 
 //export goHandleGlobal
-func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.uint32_t, iface *C.char, _ C.uint32_t) {
+func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.uint32_t, iface *C.char, version C.uint32_t) {
 	h := cgo.Handle(uintptr(handle))
 	r := h.Value().(*WLRenderer)
 	if r == nil {
@@ -95,11 +125,35 @@ func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.u
 
 	switch goIface {
 	case "zwlr_layer_shell_v1":
+		// layer-shell v1 is sufficient for our needs
 		r.layerShell = (*C.struct_zwlr_layer_shell_v1)(C.wl_registry_bind(registry, name, &C.zwlr_layer_shell_v1_interface, 1))
 		log.Debug("bound zwlr_layer_shell_v1")
 	case "wl_compositor":
-		r.compositor = (*C.struct_wl_compositor)(C.wl_registry_bind(registry, name, &C.wl_compositor_interface, 1))
+		// Need wl_surface.set_buffer_scale which is available since compositor v3
+		want := C.uint32_t(4)
+		if version < want {
+			want = version
+		}
+		r.compositor = (*C.struct_wl_compositor)(C.wl_registry_bind(registry, name, &C.wl_compositor_interface, want))
+		r.compositorVersion = int(want)
 		log.Debug("bound wl_compositor")
+	case "wl_output":
+		// Bind and track this output (we need scale event which exists since v2)
+		want := C.uint32_t(3)
+		if version < want {
+			want = version
+		}
+		wlOut := (*C.struct_wl_output)(C.wl_registry_bind(registry, name, &C.wl_output_interface, want))
+		id := uint32(name)
+		if _, exists := r.outputs[id]; !exists {
+			out := &outputSurface{id: id, output: wlOut, configChan: make(chan struct{}, 1), scale: 1}
+			r.outputs[id] = out
+			C.wl_output_add_listener(wlOut, C.get_output_listener(), unsafe.Pointer(uintptr(r.registryHandle)))
+			log.Debugf("bound wl_output id=%d", id)
+			if r.initialized {
+				r.outputsDirty = true
+			}
+		}
 	}
 }
 
@@ -113,7 +167,26 @@ func goHandleGlobalRemove(handle C.uintptr_t, _ *C.struct_wl_registry, name C.ui
 	}
 
 	log.Debugf("Global removed: name=%d", name)
-	// Check if this was a crucial interface and handle accordingly
+	id := uint32(name)
+	if out, ok := r.outputs[id]; ok {
+		// Destroy and drop this output
+		if out.eglSurface != nil && r.eglDisplay != 0 {
+			C.eglDestroySurface(r.eglDisplay, out.eglSurface)
+			out.eglSurface = nil
+		}
+		if out.layerSurf != nil {
+			C.zwlr_layer_surface_v1_destroy(out.layerSurf)
+			out.layerSurf = nil
+		}
+		if out.surface != nil {
+			C.wl_surface_destroy(out.surface)
+			out.surface = nil
+		}
+		delete(r.outputs, id)
+	}
+	if r.initialized {
+		r.outputsDirty = true
+	}
 }
 
 //export goHandleLayerSurfaceConfigure
@@ -134,20 +207,76 @@ func goHandleLayerSurfaceConfigure(handle C.uintptr_t, surface *C.struct_zwlr_la
 	// Acknowledge the configure
 	C.zwlr_layer_surface_v1_ack_configure(surface, serial)
 
-	// Store the configuration
+	// If multi-output: find the matching output and store configuration
+	for _, out := range r.outputs {
+		if out.layerSurf == surface {
+			out.width = int(width)
+			out.height = int(height)
+			out.configured = true
+			// Resize EGL window to buffer size (logical * scale) if already created
+			if out.eglWindow != nil {
+				bufW := out.width
+				bufH := out.height
+				if out.scale > 1 {
+					bufW *= out.scale
+					bufH *= out.scale
+				}
+				C.wl_egl_window_resize(out.eglWindow, C.int(bufW), C.int(bufH), 0, 0)
+			}
+			select {
+			case out.configChan <- struct{}{}:
+			default:
+			}
+			return
+		}
+	}
+
+	// Fallback to single-surface path
 	r.configWidth = int(width)
 	r.configHeight = int(height)
 	r.configured = true
-
-	// Signal that configuration is complete
 	select {
 	case r.configChan <- struct{}{}:
 	default:
 	}
 }
 
+//export goHandleOutputScale
+func goHandleOutputScale(handle C.uintptr_t, output *C.struct_wl_output, factor C.int32_t) {
+	h := cgo.Handle(uintptr(handle))
+	r := h.Value().(*WLRenderer)
+	if r == nil {
+		log.Error("goHandleOutputScale: nil renderer")
+		return
+	}
+	for _, out := range r.outputs {
+		if out.output == output {
+			newScale := int(factor)
+			if newScale <= 0 {
+				newScale = 1
+			}
+			if out.scale != newScale {
+				out.scale = newScale
+				if out.surface != nil {
+					C.wl_surface_set_buffer_scale(out.surface, C.int(out.scale))
+				}
+				if out.eglWindow != nil {
+					bufW := out.width
+					bufH := out.height
+					if out.scale > 1 {
+						bufW *= out.scale
+						bufH *= out.scale
+					}
+					C.wl_egl_window_resize(out.eglWindow, C.int(bufW), C.int(bufH), 0, 0)
+				}
+			}
+			break
+		}
+	}
+}
+
 //export goHandleLayerSurfaceClosed
-func goHandleLayerSurfaceClosed(handle C.uintptr_t, _ *C.struct_zwlr_layer_surface_v1) {
+func goHandleLayerSurfaceClosed(handle C.uintptr_t, surf *C.struct_zwlr_layer_surface_v1) {
 	log.Debugf("goHandleLayerSurfaceClosed: handle=%d", handle)
 
 	h := cgo.Handle(uintptr(handle))
@@ -158,7 +287,27 @@ func goHandleLayerSurfaceClosed(handle C.uintptr_t, _ *C.struct_zwlr_layer_surfa
 	}
 
 	log.Debug("Layer surface closed")
-	// Mark the layer surface as closed
+	// If this belongs to any output, destroy just that output
+	for id, out := range r.outputs {
+		if out.layerSurf == surf {
+			if out.eglSurface != nil && r.eglDisplay != 0 {
+				C.eglDestroySurface(r.eglDisplay, out.eglSurface)
+				out.eglSurface = nil
+			}
+			if out.layerSurf != nil {
+				C.zwlr_layer_surface_v1_destroy(out.layerSurf)
+				out.layerSurf = nil
+			}
+			if out.surface != nil {
+				C.wl_surface_destroy(out.surface)
+				out.surface = nil
+			}
+			delete(r.outputs, id)
+			return
+		}
+	}
+
+	// Otherwise, fallback to single-surface cleanup
 	r.layerSurf = nil
 	r.display = nil
 	r.configured = false
@@ -191,59 +340,55 @@ func setupRegistry(r *WLRenderer) error {
 	return nil
 }
 
-func createLayerSurface(r *WLRenderer) error {
-	if r.layerShell == nil || r.surface == nil {
+// Create per-output layer surface and block until configured
+func createLayerSurfaceForOutput(r *WLRenderer, out *outputSurface) error {
+	if r.layerShell == nil || out.surface == nil {
 		return fmt.Errorf("required layer-shell or surface not available")
 	}
 
-	// Initialize configChan if not already done
-	if r.configChan == nil {
-		r.configChan = make(chan struct{}, 1)
+	if out.configChan == nil {
+		out.configChan = make(chan struct{}, 1)
 	}
 
-	output := (*C.struct_wl_output)(nil)
 	layer := C.uint32_t(C.ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
 	namespace := C.CString("smoothpaper")
 	defer C.free(unsafe.Pointer(namespace))
 
-	// First create the layer surface
-	r.layerSurf = C.zwlr_layer_shell_v1_get_layer_surface(
-		r.layerShell, r.surface, output, layer, namespace,
+	out.layerSurf = C.zwlr_layer_shell_v1_get_layer_surface(
+		r.layerShell, out.surface, out.output, layer, namespace,
 	)
-	if r.layerSurf == nil {
+	if out.layerSurf == nil {
 		return fmt.Errorf("failed to create layer surface")
 	}
 
-	// Then add the listener to get configure events
-	C.zwlr_layer_surface_v1_add_listener(r.layerSurf, C.get_layer_surface_listener(), unsafe.Pointer(uintptr(r.registryHandle)))
+	C.zwlr_layer_surface_v1_add_listener(out.layerSurf, C.get_layer_surface_listener(), unsafe.Pointer(uintptr(r.registryHandle)))
 
-	// Set surface properties
-	C.zwlr_layer_surface_v1_set_anchor(r.layerSurf,
+	C.zwlr_layer_surface_v1_set_anchor(out.layerSurf,
 		C.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP|
 			C.ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM|
 			C.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT|
 			C.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)
 
-	C.zwlr_layer_surface_v1_set_exclusive_zone(r.layerSurf, -1)
-	C.zwlr_layer_surface_v1_set_size(r.layerSurf, 0, 0)
-	C.zwlr_layer_surface_v1_set_keyboard_interactivity(r.layerSurf, 0)
-	C.zwlr_layer_surface_v1_set_margin(r.layerSurf, 0, 0, 0, 0)
+	C.zwlr_layer_surface_v1_set_exclusive_zone(out.layerSurf, -1)
+	C.zwlr_layer_surface_v1_set_size(out.layerSurf, 0, 0)
+	C.zwlr_layer_surface_v1_set_keyboard_interactivity(out.layerSurf, 0)
+	C.zwlr_layer_surface_v1_set_margin(out.layerSurf, 0, 0, 0, 0)
 
-	log.Debugf("r.surface = %p", r.surface)
-
-	// Commit the surface to request the initial configure event
-	C.wl_surface_commit(r.surface)
-
-	// First roundtrip to ensure events are processed
+	// Respect scale if provided and supported (wl_compositor v3+)
+	if out.scale <= 0 {
+		out.scale = 1
+	}
+	if r.compositorVersion >= 3 {
+		C.wl_surface_set_buffer_scale(out.surface, C.int(out.scale))
+	}
+	C.wl_surface_commit(out.surface)
 	C.wl_display_roundtrip(r.display)
 
-	// Wait for the surface to be configured
-	log.Debug("Waiting for layer surface configure...")
 	select {
-	case <-r.configChan:
-		log.Debugf("Layer surface configured: width=%d, height=%d", r.configWidth, r.configHeight)
+	case <-out.configChan:
+		log.Debugf("Output %d configured: %dx%d", out.id, out.width, out.height)
 	case <-time.After(5 * time.Second):
-		return fmt.Errorf("timeout waiting for layer surface configure")
+		return fmt.Errorf("timeout waiting for output configure")
 	}
 
 	return nil
@@ -257,7 +402,8 @@ func createWLEGLWindow(surface *C.struct_wl_surface, width, height int) *C.struc
 	return eglWindow
 }
 
-func initEGL(dpy *C.struct_wl_display, eglWindow *C.struct_wl_egl_window) (C.EGLDisplay, C.EGLSurface, C.EGLContext) {
+// Initialize EGL display and context without creating a surface yet
+func initEGLNoSurface(dpy *C.struct_wl_display) (C.EGLDisplay, C.EGLContext, C.EGLConfig) {
 	eglDisplay := C.eglGetDisplay(C.EGLNativeDisplayType(dpy))
 	if eglDisplay == 0 {
 		panic("failed to get EGL display")
@@ -288,16 +434,16 @@ func initEGL(dpy *C.struct_wl_display, eglWindow *C.struct_wl_egl_window) (C.EGL
 	if eglContext == nil {
 		panic("failed to create EGL context")
 	}
+
+	return eglDisplay, eglContext, config
+}
+
+func createEGLSurface(eglDisplay C.EGLDisplay, config C.EGLConfig, eglWindow *C.struct_wl_egl_window) C.EGLSurface {
 	eglSurface := C.eglCreateWindowSurface(eglDisplay, config, C.EGLNativeWindowType(uintptr(unsafe.Pointer(eglWindow))), nil)
 	if eglSurface == nil {
 		panic("failed to create EGL surface")
 	}
-
-	if C.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext) == C.EGL_FALSE {
-		panic("failed to make EGL context current")
-	}
-
-	return eglDisplay, eglSurface, eglContext
+	return eglSurface
 }
 
 // connectToDisplay handles all the display connection logic
@@ -315,40 +461,43 @@ func (r *WLRenderer) connectToDisplay() error {
 		return err
 	}
 
-	// 3. Create surface
-	if r.compositor == nil {
-		return fmt.Errorf("failed to bind compositor interface")
-	}
-	r.surface = C.wl_compositor_create_surface(r.compositor)
-	if r.surface == nil {
-		return fmt.Errorf("failed to create surface")
+	// 3. Initialize shared EGL context without surfaces
+	r.eglDisplay, r.eglContext, r.eglConfig = initEGLNoSurface(r.display)
+
+	// 4. Create a wl_surface/layer surface per output
+	for _, out := range r.outputs {
+		out.surface = C.wl_compositor_create_surface(r.compositor)
+		if out.surface == nil {
+			return fmt.Errorf("failed to create wl_surface for output")
+		}
+		if err := createLayerSurfaceForOutput(r, out); err != nil {
+			return err
+		}
+		w := out.width
+		h := out.height
+		if w == 0 {
+			w = 1
+		}
+		if h == 0 {
+			h = 1
+		}
+		if out.scale > 1 {
+			w *= out.scale
+			h *= out.scale
+		}
+		out.eglWindow = createWLEGLWindow(out.surface, w, h)
+		out.eglSurface = createEGLSurface(r.eglDisplay, r.eglConfig, out.eglWindow)
+		// Make current once to initialize GL state
+		if C.eglMakeCurrent(r.eglDisplay, out.eglSurface, out.eglSurface, r.eglContext) == C.EGL_FALSE {
+			return fmt.Errorf("failed to make EGL context current for output")
+		}
+		if r.shaderProgram == 0 {
+			r.setupShaderProgram()
+		}
 	}
 
-	// 4. Create layer surface
-	if err := createLayerSurface(r); err != nil {
-		return err
-	}
-
-	// 5. Set up EGL
-	width, height := r.configWidth, r.configHeight
-	if width == 0 {
-		width = 1
-	}
-	if height == 0 {
-		height = 1
-	}
-
-	log.Debugf("Creating EGL window with size %dx%d", width, height)
-	eglWindow := createWLEGLWindow(r.surface, width, height)
-	runtime.KeepAlive(eglWindow)
-	r.eglDisplay, r.eglSurface, r.eglContext = initEGL(r.display, eglWindow)
-
-	// Use the configured size for the renderer
-	r.width = width
-	r.height = height
-
-	// 6. Set up shader program
-	r.setupShaderProgram()
+	// Mark initialization done so future output add/remove triggers reconfigure
+	r.initialized = true
 
 	return nil
 }
@@ -495,125 +644,146 @@ func applyEasing(mode types.EasingMode, t float32) float32 {
 }
 
 func (r *WLRenderer) Render() error {
-	if r.layerSurf == nil {
-		return fmt.Errorf("layer surface is nil")
+	if r.outputsDirty {
+		// Rebuild surfaces matching current outputs
+		r.outputsDirty = false
+		// Destroy any per-output resources for outputs that lost their layer surface
+		// but keep the output entry so we can recreate surfaces
+		for _, out := range r.outputs {
+			if out.layerSurf == nil {
+				if out.eglSurface != nil && r.eglDisplay != 0 {
+					C.eglDestroySurface(r.eglDisplay, out.eglSurface)
+					out.eglSurface = nil
+				}
+				if out.surface != nil {
+					C.wl_surface_destroy(out.surface)
+					out.surface = nil
+				}
+			}
+		}
+		// Recreate for all known outputs missing surfaces
+		for _, out := range r.outputs {
+			if out.surface == nil {
+				out.surface = C.wl_compositor_create_surface(r.compositor)
+				if out.surface == nil {
+					return fmt.Errorf("failed to create wl_surface for output")
+				}
+				if err := createLayerSurfaceForOutput(r, out); err != nil {
+					return err
+				}
+				w := out.width
+				h := out.height
+				if w == 0 {
+					w = 1
+				}
+				if h == 0 {
+					h = 1
+				}
+				if out.scale > 1 {
+					w *= out.scale
+					h *= out.scale
+				}
+				out.eglWindow = createWLEGLWindow(out.surface, w, h)
+				out.eglSurface = createEGLSurface(r.eglDisplay, r.eglConfig, out.eglWindow)
+			}
+		}
 	}
 
-	// if t := C.wl_display_roundtrip(r.display); (t == -1) || (t == C.EGL_FALSE) {
-	// 	return fmt.Errorf("failed to roundtrip display")
-	// }
-
-	// Calculate alpha value
+	// Calculate alpha
 	alpha := float32(1.0)
 	if r.fading {
 		elapsed := time.Since(r.start)
 		progress := float32(elapsed.Seconds() / r.duration.Seconds())
-
 		if progress >= 1.0 {
-			// Transition complete
 			progress = 1.0
-
-			// Store the old texture for cleanup
 			oldTexture := r.currentTex
-
-			// Swap textures
 			r.currentTex = r.transitionTex
 			r.transitionTex = texture{}
-
-			// Set fading to false to exit the transition loop
 			r.fading = false
-
-			// Render with the final texture before deletion
 			alpha = 1.0
-
-			// Delete old texture after swap
 			if oldTexture.id != 0 {
 				C.glDeleteTextures(1, &oldTexture.id)
 			}
 		} else {
-			// Apply easing to alpha based on progress
 			alpha = applyEasing(r.easingMode, progress)
 		}
 	}
 
-	// Set up rendering
-	C.glClear(C.GL_COLOR_BUFFER_BIT)
-	C.glUseProgram(r.shaderProgram)
+	anyRendered := false
+	for _, out := range r.outputs {
+		if !out.configured || out.eglSurface == nil {
+			continue
+		}
+		anyRendered = true
+		if C.eglMakeCurrent(r.eglDisplay, out.eglSurface, out.eglSurface, r.eglContext) == C.EGL_FALSE {
+			return fmt.Errorf("failed to make EGL context current for output")
+		}
+		if r.shaderProgram == 0 {
+			r.setupShaderProgram()
+		}
+		// Ensure viewport matches buffer size
+		C.glViewport(0, 0, C.GLsizei(out.width*out.scale), C.GLsizei(out.height*out.scale))
+		C.glClear(C.GL_COLOR_BUFFER_BIT)
+		C.glUseProgram(r.shaderProgram)
 
-	if r.fading && r.currentTex.id != 0 {
-		// When fading, first draw current texture at full opacity (no fading)
-		C.glUniform1f(r.uniformAlpha, 1.0)
-		C.glActiveTexture(C.GL_TEXTURE0)
-		C.glBindTexture(C.GL_TEXTURE_2D, r.currentTex.id)
-		C.glUniform1i(r.uniformTex, 0)
-
-		// Draw the quad with the current texture
-		drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.currentTex.width), C.GLint(r.currentTex.height))
-
-		// Enable blending for black texture and new texture
-		C.glEnable(C.GL_BLEND)
-		C.glBlendFunc(C.GL_SRC_ALPHA, C.GL_ONE_MINUS_SRC_ALPHA)
-
-		// Draw black texture with increasing alpha
-		if r.blackTex.id != 0 {
-			C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
+		if r.fading && r.currentTex.id != 0 {
+			C.glUniform1f(r.uniformAlpha, 1.0)
 			C.glActiveTexture(C.GL_TEXTURE0)
-			C.glBindTexture(C.GL_TEXTURE_2D, r.blackTex.id)
+			C.glBindTexture(C.GL_TEXTURE_2D, r.currentTex.id)
 			C.glUniform1i(r.uniformTex, 0)
-
-			// Draw the black quad (use stretch mode to cover entire screen)
-			drawTexturedQuad(r.width, r.height, types.ScalingModeStretch, r.attribPos, r.attribTex, C.GLint(r.width), C.GLint(r.height))
+			drawTexturedQuad(out.width, out.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.currentTex.width), C.GLint(r.currentTex.height))
+			C.glEnable(C.GL_BLEND)
+			C.glBlendFunc(C.GL_SRC_ALPHA, C.GL_ONE_MINUS_SRC_ALPHA)
+			if r.blackTex.id != 0 {
+				C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
+				C.glActiveTexture(C.GL_TEXTURE0)
+				C.glBindTexture(C.GL_TEXTURE_2D, r.blackTex.id)
+				C.glUniform1i(r.uniformTex, 0)
+				drawTexturedQuad(out.width, out.height, types.ScalingModeStretch, r.attribPos, r.attribTex, C.GLint(out.width), C.GLint(out.height))
+			}
+			if r.transitionTex.id != 0 {
+				C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
+				C.glActiveTexture(C.GL_TEXTURE0)
+				C.glBindTexture(C.GL_TEXTURE_2D, r.transitionTex.id)
+				C.glUniform1i(r.uniformTex, 0)
+				drawTexturedQuad(out.width, out.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.transitionTex.width), C.GLint(r.transitionTex.height))
+			}
+			C.glDisable(C.GL_BLEND)
+		} else if r.currentTex.id != 0 {
+			C.glUniform1f(r.uniformAlpha, 1.0)
+			C.glActiveTexture(C.GL_TEXTURE0)
+			C.glBindTexture(C.GL_TEXTURE_2D, r.currentTex.id)
+			C.glUniform1i(r.uniformTex, 0)
+			drawTexturedQuad(out.width, out.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.currentTex.width), C.GLint(r.currentTex.height))
 		}
 
-		// Draw new texture with same alpha
-		if r.transitionTex.id != 0 {
-			C.glUniform1f(r.uniformAlpha, C.GLfloat(alpha))
-			C.glActiveTexture(C.GL_TEXTURE0)
-			C.glBindTexture(C.GL_TEXTURE_2D, r.transitionTex.id)
-			C.glUniform1i(r.uniformTex, 0)
-
-			// Draw the transition texture with the same scaling mode as current texture
-			drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.transitionTex.width), C.GLint(r.transitionTex.height))
+		C.glFinish()
+		if C.eglGetError() != C.EGL_SUCCESS {
+			return fmt.Errorf("EGL error occurred")
 		}
-
-		C.glDisable(C.GL_BLEND)
-	} else if r.currentTex.id != 0 {
-		// Not fading, just draw the current texture at full opacity
-		C.glUniform1f(r.uniformAlpha, 1.0)
-		C.glActiveTexture(C.GL_TEXTURE0)
-		C.glBindTexture(C.GL_TEXTURE_2D, r.currentTex.id)
-		C.glUniform1i(r.uniformTex, 0)
-
-		// Draw the quad with the current texture
-		drawTexturedQuad(r.width, r.height, r.scaleMode, r.attribPos, r.attribTex, C.GLint(r.currentTex.width), C.GLint(r.currentTex.height))
+		if C.glGetError() != C.GL_NO_ERROR {
+			return fmt.Errorf("OpenGL error occurred")
+		}
+		C.eglSwapBuffers(r.eglDisplay, out.eglSurface)
 	}
 
-	// Ensure all rendering is complete before swap
-	C.glFinish()
-
-	if r.layerSurf == nil || r.eglSurface == nil || r.eglDisplay == 0 {
-		log.Debug("Display disconnected")
-		return fmt.Errorf("display disconnected")
+	if !anyRendered {
+		// Fallback: if no outputs tracked (rare), keep old behavior checks
+		if r.layerSurf == nil || r.eglSurface == nil || r.eglDisplay == 0 {
+			return fmt.Errorf("display disconnected")
+		}
+		if t := C.wl_display_roundtrip(r.display); (t == -1) || (t == C.EGL_FALSE) {
+			return fmt.Errorf("failed to roundtrip display")
+		}
+		C.eglSwapBuffers(r.eglDisplay, r.eglSurface)
+	} else {
+		// Process wayland events once per frame
+		if t := C.wl_display_roundtrip(r.display); (t == -1) || (t == C.EGL_FALSE) {
+			return fmt.Errorf("failed to roundtrip display")
+		}
 	}
 
-	if C.eglGetError() != C.EGL_SUCCESS {
-		log.Debug("EGL error occurred")
-		return fmt.Errorf("EGL error occurred")
-	}
-
-	if C.glGetError() != C.GL_NO_ERROR {
-		log.Debug("OpenGL error occurred")
-		return fmt.Errorf("OpenGL error occurred")
-	}
-
-	if t := C.wl_display_roundtrip(r.display); (t == -1) || (t == C.EGL_FALSE) {
-		return fmt.Errorf("failed to roundtrip display")
-	}
-
-	// Swap buffers and wait for next frame
-	C.eglSwapBuffers(r.eglDisplay, r.eglSurface)
 	time.Sleep(time.Second / time.Duration(r.framerate))
-
 	return nil
 }
 
@@ -640,6 +810,23 @@ func (r *WLRenderer) Cleanup() {
 	if r.shaderProgram != 0 {
 		C.glDeleteProgram(r.shaderProgram)
 		r.shaderProgram = 0
+	}
+
+	// Destroy per-output resources
+	for id, out := range r.outputs {
+		if out.eglSurface != nil && r.eglDisplay != 0 {
+			C.eglDestroySurface(r.eglDisplay, out.eglSurface)
+			out.eglSurface = nil
+		}
+		if out.layerSurf != nil {
+			C.zwlr_layer_surface_v1_destroy(out.layerSurf)
+			out.layerSurf = nil
+		}
+		if out.surface != nil {
+			C.wl_surface_destroy(out.surface)
+			out.surface = nil
+		}
+		delete(r.outputs, id)
 	}
 
 	// Release EGL resources
@@ -681,21 +868,27 @@ func (r *WLRenderer) TryReconnect() error {
 	// Clean up any existing resources
 	r.Cleanup()
 
-	// Initialize a new config channel
-	r.configChan = make(chan struct{}, 1)
-
 	// Reconnect to display
 	return r.connectToDisplay()
 }
 
 func (r *WLRenderer) IsDisplayRunning() bool {
-	if r.layerSurf == nil || r.eglSurface == nil || r.eglDisplay == 0 {
-		log.Debug("Display disconnected, cleaning up...")
+	if r.eglDisplay == 0 || r.eglContext == nil {
 		r.Cleanup()
 		return false
 	}
-
-	return true
+	// Consider running if at least one output is configured
+	for _, out := range r.outputs {
+		if out.configured && out.eglSurface != nil {
+			return true
+		}
+	}
+	// Fallback to single-surface check
+	if r.layerSurf != nil && r.eglSurface != nil {
+		return true
+	}
+	r.Cleanup()
+	return false
 }
 
 func (r *WLRenderer) uploadImageToTexture(img image.Image) (C.GLuint, error) {
