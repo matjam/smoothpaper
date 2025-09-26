@@ -1,4 +1,10 @@
 {
+    "go.vetFlags": [
+        "-unsafeptr=false"
+    ],
+    "gopls": {
+        "analyses": { "unsafeptr": false }
+    },
     "files.associations": {
         "CODEOWNERS": "plaintext",
         "any": "cpp",

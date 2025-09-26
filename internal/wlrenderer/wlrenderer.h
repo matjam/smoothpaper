@@ -59,3 +59,39 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 static inline const struct zwlr_layer_surface_v1_listener *get_layer_surface_listener() {
     return &layer_surface_listener;
 }
+
+// Core protocol interface needed for binding wl_output from Go
+extern const struct wl_interface wl_output_interface;
+
+// ===== wl_output listener for scale/geometry =====
+extern void goHandleOutputScale(uintptr_t handle, struct wl_output *output, int32_t factor);
+
+static void shimHandleOutputGeometry(void *data, struct wl_output *output, int32_t x, int32_t y,
+                                    int32_t phys_width, int32_t phys_height, int32_t subpixel,
+                                    const char *make, const char *model, int32_t transform) {
+    (void)data; (void)output; (void)x; (void)y; (void)phys_width; (void)phys_height;
+    (void)subpixel; (void)make; (void)model; (void)transform;
+}
+
+static void shimHandleOutputMode(void *data, struct wl_output *output, uint32_t flags,
+                                 int32_t width, int32_t height, int32_t refresh) {
+    (void)data; (void)output; (void)flags; (void)width; (void)height; (void)refresh;
+}
+
+static void shimHandleOutputDone(void *data, struct wl_output *output) {
+    (void)data; (void)output;
+}
+
+static void shimHandleOutputScale(void *data, struct wl_output *output, int32_t factor) {
+    goHandleOutputScale((uintptr_t)data, output, factor);
+}
+
+static const struct wl_output_listener output_listener = {
+    .geometry = shimHandleOutputGeometry,
+    .mode     = shimHandleOutputMode,
+    .done     = shimHandleOutputDone,
+    .scale    = shimHandleOutputScale,
+};
+
+static inline const struct wl_output_listener *get_output_listener() { return &output_listener; }
+
