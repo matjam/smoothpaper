@@ -31,6 +31,8 @@ type GLXRenderer struct {
 	texA texture // Primary texture (the currently displayed image)
 	texB texture // Secondary texture (used for transitioning)
 
+	rootPixmap C.Pixmap // Pixmap currently set as the root background
+
 	start    time.Time     // Start time of the transition
 	duration time.Duration // Duration of the transition
 	fading   bool          // Whether a transition is currently in progress
@@ -101,7 +103,7 @@ func (r *GLXRenderer) SetRootPixmap() {
 		copy(dst, src)
 	}
 
-	C.set_root_pixmap(r.display, C.XDefaultScreen(r.display), (*C.uchar)(unsafe.Pointer(&flipped[0])), C.int(w), C.int(h))
+	r.rootPixmap = C.set_root_pixmap(r.display, C.XDefaultScreen(r.display), (*C.uchar)(unsafe.Pointer(&flipped[0])), C.int(w), C.int(h), r.rootPixmap)
 }
 
 // GetSize returns the dimensions of the rendering window.
