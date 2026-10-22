@@ -144,7 +144,10 @@ func (c *Manager) Run() {
 	c.SetCurrent()
 
 	// A value of 0 disables the slideshow
-	delay := max(viper.GetInt("delay"), 0)
+	delay := viper.GetInt("delay")
+	if delay < 0 {
+		delay = 0
+	}
 
 	running := true
 
