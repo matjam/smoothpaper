@@ -127,7 +127,7 @@ Window create_backed_window(Display *dpy, int screen, int x, int y, int width, i
 
 // Create a Pixmap from raw 32-bit image data and set it as the root background
 // image should be in XImage-compatible format (32-bit RGBA or BGRA)
-void set_root_pixmap(Display *dpy, int screen, const unsigned char *data, int width, int height) {
+Pixmap set_root_pixmap(Display *dpy, int screen, const unsigned char *data, int width, int height, Pixmap old) {
     Window root   = RootWindow(dpy, screen);
     Pixmap pixmap = XCreatePixmap(dpy, root, width, height, DefaultDepth(dpy, screen));
 
@@ -149,7 +149,11 @@ void set_root_pixmap(Display *dpy, int screen, const unsigned char *data, int wi
     XChangeProperty(dpy, root, prop_eset, XA_PIXMAP, 32, PropModeReplace, (unsigned char *)&pixmap, 1);
 
     XFreeGC(dpy, gc);
-    img->data = NULL; // Prevent XDestroyImage from freeing original data
     XDestroyImage(img);
+
+    if (old != None)
+        XFreePixmap(dpy, old);
+
     XFlush(dpy);
+    return pixmap;
 }
