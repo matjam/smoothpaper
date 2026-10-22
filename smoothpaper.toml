@@ -36,6 +36,7 @@ scale_mode = "horizontal"
 fade_speed = 5
 
 # the delay between images, in seconds. Must be an integer.
+# a value of 0 disables the slideshow
 delay = 300
 
 # frames per second for the opengl renderer. This is the maximum number of frames per second

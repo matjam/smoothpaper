@@ -143,9 +143,10 @@ func (c *Manager) Run() {
 	c.NextWallpaper()
 	c.SetCurrent()
 
+	// A value of 0 disables the slideshow
 	delay := viper.GetInt("delay")
-	if delay == 0 {
-		delay = 10
+	if delay < 0 {
+		delay = 0
 	}
 
 	running := true
@@ -177,7 +178,9 @@ func (c *Manager) Run() {
 				log.Error("Unknown command:", cmd.Type)
 			}
 		} else if time.Since(timeChanged) > time.Duration(delay)*time.Second {
-			c.Next()
+			if delay != 0 {
+				c.Next()
+			}
 			timeChanged = time.Now()
 		}
 
