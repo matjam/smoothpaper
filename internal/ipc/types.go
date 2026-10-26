@@ -8,11 +8,13 @@ const (
 	CommandLoad   CommandType = "load"   // replace the list of wallpapers
 	CommandStatus CommandType = "status" // gets the current status
 	CommandAdd    CommandType = "add"
+	CommandReload CommandType = "reload" // hotreload the config
 )
 
 type Command struct {
-	Type CommandType `json:"type"`
-	Args []string    `json:"args"`
+	Type  CommandType `json:"type"`
+	Args  []string    `json:"args"`
+	Reply chan error  `json:"-"` // if set, Run() sends the result of the command here
 }
 
 type ManagerInterface interface {
@@ -24,6 +26,10 @@ type Response struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
 	Data    any    `json:"data"`
+}
+
+type ErrorResponse struct {
+	Error string `json:"error"`
 }
 
 type StatusResponse struct {

@@ -60,3 +60,24 @@ func loadHandler(m ManagerInterface) echo.HandlerFunc {
 		})
 	}
 }
+
+// POST /reload
+func reloadHandler(m ManagerInterface) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		reply := make(chan error, 1)
+		m.EnqueueCommand(Command{
+			Type:  CommandReload,
+			Reply: reply,
+		})
+
+		select {
+		case err := <-reply:
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+			}
+			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		case <-c.Request().Context().Done():
+			return c.Request().Context().Err()
+		}
+	}
+}

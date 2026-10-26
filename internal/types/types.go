@@ -9,6 +9,18 @@ const (
 	ScalingModeFitVertical   ScalingMode = "vertical"
 )
 
+func (s ScalingMode) Valid() bool {
+	switch s {
+	case ScalingModeCenter,
+		ScalingModeStretch,
+		ScalingModeFitHorizontal,
+		ScalingModeFitVertical:
+		return true
+	default:
+		return false
+	}
+}
+
 type EasingMode string
 
 const (
@@ -17,3 +29,15 @@ const (
 	EasingEaseOut   EasingMode = "ease-out"
 	EasingEaseInOut EasingMode = "ease-in-out"
 )
+
+func (e EasingMode) Valid() bool {
+	switch e {
+	case EasingLinear,
+		EasingEaseIn,
+		EasingEaseOut,
+		EasingEaseInOut:
+		return true
+	default:
+		return false
+	}
+}

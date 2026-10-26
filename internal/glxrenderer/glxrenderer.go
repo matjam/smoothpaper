@@ -85,6 +85,21 @@ func NewRenderer(scale types.ScalingMode, easing types.EasingMode, framerate int
 	}, nil
 }
 
+// X renderer must re-render immediately, otherwise the change is hidden until the next image is shown
+func (r *GLXRenderer) SetScaleMode(scaleMode types.ScalingMode) {
+	r.scaleMode = scaleMode
+	r.Render()
+	r.SetRootPixmap()
+}
+
+func (r *GLXRenderer) SetEasingMode(easingMode types.EasingMode) {
+	r.easingMode = easingMode
+}
+
+func (r *GLXRenderer) SetFrameRateLimit(framerate int) {
+	r.framerate = framerate
+}
+
 // SetRootPixmap reads pixels from the OpenGL backbuffer, flips vertically, and sets the root pixmap
 func (r *GLXRenderer) SetRootPixmap() {
 	w, h := r.width, r.height

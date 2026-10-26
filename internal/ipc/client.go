@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -25,6 +26,22 @@ func SendLoad(wallpapers []string) error {
 		SetBody(wallpapers).
 		Post("/load")
 	return err
+}
+
+func SendReload() error {
+	resp, err := getRestyClient().R().
+		SetError(&ErrorResponse{}).
+		Post("/reload")
+	if err != nil {
+		return err
+	}
+	if resp.IsError() {
+		if e, ok := resp.Error().(*ErrorResponse); ok && e.Error != "" {
+			return errors.New(e.Error)
+		}
+		return fmt.Errorf("reload failed: %s", resp.Status())
+	}
+	return nil
 }
 
 func SendStatus() (*StatusResponse, error) {

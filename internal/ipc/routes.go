@@ -9,4 +9,5 @@ func RegisterRoutes(e *echo.Echo, manager ManagerInterface) {
 	e.POST("/stop", stopHandler(manager))
 	e.POST("/next", nextHandler(manager))
 	e.POST("/load", loadHandler(manager))
+	e.POST("/reload", reloadHandler(manager))
 }

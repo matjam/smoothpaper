@@ -35,7 +35,12 @@ scale_mode = "horizontal"
 # the speed at which the images fade in and out, in seconds.
 fade_speed = 5
 
+# the easing function of the fade. Options are "linear", "ease-in", "ease-out" and
+# "ease-in-out".
+easing = "ease-in-out"
+
 # the delay between images, in seconds. Must be an integer.
+# a value of 0 disables the slideshow
 delay = 300
 
 # frames per second for the opengl renderer. This is the maximum number of frames per second

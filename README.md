@@ -81,8 +81,6 @@ Please check the Issues in Github for all issues. Major ones are:
 
 ### TODO
 
-- Dynamically change the wallpapers directory (currently you have to restart the
-  program to change the directory)
 - Add a task bar icon to control the program
 - More cool transitions?
 
@@ -220,7 +218,12 @@ scale_mode = "horizontal"
 # the speed at which the images fade in and out, in seconds.
 fade_speed = 5
 
+# the easing function of the fade. Options are "linear", "ease-in", "ease-out" and
+# "ease-in-out".
+easing = "ease-in-out"
+
 # the delay between images, in seconds. Must be an integer.
+# a value of 0 disables the slideshow.
 delay = 300
 
 # frames per second for the opengl renderer. This is the maximum number of frames per second
@@ -240,6 +243,9 @@ smoothpaper daemon by using the following commands:
 - `smoothpaper next` - switch to the next wallpaper
 - `smoothpaper load <filename>` - switch to the given wallpaper. You must give
   an absolute path.
+- `smoothpaper reload` - re-reads the configuration file and applies the
+  changes without restarting the daemon. If the new config is invalid, the
+  daemon keeps the old one and shows the error.
 - `smoothpaper status` - returns the currently shown wallpaper and the status of
   the daemon, in JSON format.
 - `smoothpaper stop` - exits the daemon.

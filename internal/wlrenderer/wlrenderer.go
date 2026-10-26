@@ -112,6 +112,18 @@ func NewRenderer(scale types.ScalingMode, easing types.EasingMode, framerate int
 	return r, nil
 }
 
+func (r *WLRenderer) SetScaleMode(scaleMode types.ScalingMode) {
+	r.scaleMode = scaleMode
+}
+
+func (r *WLRenderer) SetEasingMode(easingMode types.EasingMode) {
+	r.easingMode = easingMode
+}
+
+func (r *WLRenderer) SetFrameRateLimit(framerate int) {
+	r.framerate = framerate
+}
+
 //export goHandleGlobal
 func goHandleGlobal(handle C.uintptr_t, registry *C.struct_wl_registry, name C.uint32_t, iface *C.char, version C.uint32_t) {
 	h := cgo.Handle(uintptr(handle))

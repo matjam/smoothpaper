@@ -1,10 +1,15 @@
 package cli
 
 import (
-	"github.com/spf13/cobra"
+	"fmt"
+	"math"
+
+	"github.com/matjam/smoothpaper/internal/config"
 	"github.com/spf13/viper"
 )
 
+// InitConfig runs one time at startup. A reload calls viper.ReadInConfig()
+// instead: a second InitConfig() call panics on the "toggle" flag
 func InitConfig() {
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
@@ -19,14 +24,7 @@ func InitConfig() {
 		}
 	}
 
-	viper.SetDefault("wallpapers", "~/Pictures/wallpapers")
-	viper.SetDefault("shuffle", true)
-	viper.SetDefault("scale_mode", "vertical")
-	viper.SetDefault("easing", "ease-in-out")
-	viper.SetDefault("fade_speed", 1.0)
-	viper.SetDefault("delay", 300)
-	viper.SetDefault("framerate_limit", 60)
-	viper.SetDefault("debug", false)
+	config.SetDefaults()
 
 	viper.AutomaticEnv() // read environment variables that match
 
@@ -34,6 +32,30 @@ func InitConfig() {
 	// when this action is called directly.
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 
-	err := viper.ReadInConfig()
-	cobra.CheckErr(err)
+}
+
+// jsonSafe replaces each NaN or infinite float with its string form. JSON has
+// no value for these numbers, so json.Marshal fails on them. A TOML table
+// gives a nested map and a TOML array gives a slice, so jsonSafe also looks
+// into these.
+func jsonSafe(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, value := range v {
+			out[key] = jsonSafe(value)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, value := range v {
+			out[i] = jsonSafe(value)
+		}
+		return out
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return fmt.Sprint(v)
+		}
+	}
+	return v
 }

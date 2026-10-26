@@ -2,32 +2,42 @@ package ipc
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"math/rand/v2"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/charmbracelet/log"
+	"github.com/matjam/smoothpaper/internal/config"
 	"github.com/matjam/smoothpaper/internal/glxrenderer"
 	"github.com/matjam/smoothpaper/internal/types"
+	"github.com/matjam/smoothpaper/internal/wallpapers"
 	"github.com/matjam/smoothpaper/internal/wlrenderer"
 	"github.com/spf13/viper"
 )
 
 type Manager struct {
 	sync.Mutex
-	wallpapers       []string // list of wallpaper paths\
+	wallpapers       []string // list of wallpaper paths
 	renderer         Renderer
 	cmds             chan Command
 	currentWallpaper string
+	cfg              *config.Config // active config
 }
 
 // Renderer interface defines the methods that a renderer must implement to render
 // images as wallpapers, including setting the current image, transitioning to the next
 // image, rendering the current image, cleaning up resources, and getting the dimensions
 // of the window.
+
+// Changing the config propagates to the renderer, by updating the values with setters
 type Renderer interface {
+	SetScaleMode(scaleMode types.ScalingMode)                  // Set how images scale to the screen
+	SetEasingMode(easingMode types.EasingMode)                 // Set the easing function of the fade
+	SetFrameRateLimit(framerate int)                           // Set the maximum frames per second
 	SetImage(image image.Image) error                          // Set the current image
 	Transition(next image.Image, duration time.Duration) error // Transition to the next image
 	Render() error                                             // Render the current image, called in a loop and will block for each frame
@@ -38,7 +48,7 @@ type Renderer interface {
 }
 
 // NewManager creates a new wallpaper manager with the specified wallpapers.
-func NewManager(wallpapers []string) *Manager {
+func NewManager(wallpapers []string, cfg *config.Config) *Manager {
 	var renderer Renderer
 	var err error
 
@@ -46,9 +56,9 @@ func NewManager(wallpapers []string) *Manager {
 		log.Info("Detected Wayland session")
 
 		renderer, err = wlrenderer.NewRenderer(
-			types.ScalingMode(viper.GetString("scale_mode")),
-			types.EasingMode(viper.GetString("easing")),
-			viper.GetInt("framerate_limit"),
+			cfg.ScaleMode,
+			cfg.Easing,
+			cfg.FramerateLimit,
 		)
 		if err != nil {
 			log.Fatal("Failed to create wayland renderer:", err)
@@ -57,9 +67,9 @@ func NewManager(wallpapers []string) *Manager {
 		log.Info("Wayland not detected, assuming X11 session")
 
 		renderer, err = glxrenderer.NewRenderer(
-			types.ScalingMode(viper.GetString("scale_mode")),
-			types.EasingMode(viper.GetString("easing")),
-			viper.GetInt("framerate_limit"),
+			cfg.ScaleMode,
+			cfg.Easing,
+			cfg.FramerateLimit,
 		)
 		if err != nil {
 			log.Fatal("Failed to create glx renderer:", err)
@@ -70,6 +80,7 @@ func NewManager(wallpapers []string) *Manager {
 		wallpapers: wallpapers,
 		renderer:   renderer,
 		cmds:       make(chan Command, 1),
+		cfg:        cfg,
 	}
 }
 
@@ -86,9 +97,6 @@ func (c *Manager) SetCurrentWallpaper(wallpaper string) {
 }
 
 func (c *Manager) Stop() {
-	c.Lock()
-	defer c.Unlock()
-
 	if len(c.cmds) == 0 {
 		c.cmds <- Command{
 			Type: CommandStop,
@@ -143,11 +151,6 @@ func (c *Manager) Run() {
 	c.NextWallpaper()
 	c.SetCurrent()
 
-	delay := viper.GetInt("delay")
-	if delay == 0 {
-		delay = 10
-	}
-
 	running := true
 
 	for running {
@@ -162,6 +165,21 @@ func (c *Manager) Run() {
 				log.Info("Received next command")
 				c.Next()
 				timeChanged = time.Now()
+			case CommandReload:
+				log.Info("Received reload command")
+				runNext, err := c.reload()
+				if err != nil {
+					log.Errorf("Failed to reload config: %v", err)
+				} else {
+					log.Info("Config reloaded")
+				}
+				if cmd.Reply != nil {
+					cmd.Reply <- err
+				}
+				if runNext {
+					c.Next()
+					timeChanged = time.Now()
+				}
 			case CommandLoad:
 				log.Info("Received load command")
 				if len(cmd.Args) == 0 {
@@ -176,8 +194,10 @@ func (c *Manager) Run() {
 			default:
 				log.Error("Unknown command:", cmd.Type)
 			}
-		} else if time.Since(timeChanged) > time.Duration(delay)*time.Second {
-			c.Next()
+		} else if time.Since(timeChanged) > time.Duration(c.cfg.Delay)*time.Second {
+			if c.cfg.Delay != 0 {
+				c.Next()
+			}
 			timeChanged = time.Now()
 		}
 
@@ -211,26 +231,77 @@ func (c *Manager) Run() {
 	log.Info("Wallpaper Manager stopped.")
 }
 
+// reload reads the config file again and applies the changes atomically. If the config is invalid a reload fails and
+// nothing breaks
+func (c *Manager) reload() (bool, error) {
+	if err := viper.ReadInConfig(); err != nil {
+		return false, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	newCfg, err := config.Load()
+	if err != nil {
+		return false, fmt.Errorf("invalid config: %w", err)
+	}
+
+	runNext := false
+
+	if !slices.Equal(c.cfg.Directories, newCfg.Directories) ||
+		c.cfg.Shuffle != newCfg.Shuffle {
+		paths, err := wallpapers.ScanWallpapers(newCfg.Directories)
+		if err != nil {
+			return false, fmt.Errorf("failed to scan wallpapers: %w", err)
+		}
+
+		c.SetWallpapers(paths)
+		if newCfg.Shuffle {
+			c.Shuffle()
+		}
+		runNext = true
+	}
+
+	if newCfg.Debug {
+		log.SetLevel(log.DebugLevel)
+	} else {
+		log.SetLevel(log.InfoLevel)
+	}
+
+	if c.cfg.ScaleMode != newCfg.ScaleMode {
+		c.renderer.SetScaleMode(newCfg.ScaleMode)
+	}
+
+	if c.cfg.Easing != newCfg.Easing {
+		c.renderer.SetEasingMode(newCfg.Easing)
+	}
+
+	if c.cfg.FramerateLimit != newCfg.FramerateLimit {
+		c.renderer.SetFrameRateLimit(newCfg.FramerateLimit)
+	}
+
+	c.cfg = newCfg
+
+	return runNext, nil
+}
+
 func (c *Manager) Next() {
 	nextFile := c.NextWallpaper()
 	if nextFile == "" {
-		log.Fatal("No next wallpaper found")
-		os.Exit(1)
+		log.Error("No next wallpaper found")
+		return
 	}
 
 	nextImgData, err := os.ReadFile(nextFile)
 	if err != nil {
-		log.Fatal("Failed to read next image file:", err)
-		os.Exit(1)
+		log.Error("Failed to read next image file:", err)
+		return
 	}
 	nextImg, _, err := image.Decode(bytes.NewReader(nextImgData))
 	if err != nil {
-		log.Fatal("Failed to decode next image:", err)
-		os.Exit(1)
+		log.Error("Failed to decode next image:", err)
+		return
 	}
 	log.Infof("loading %v (%vx%v)", nextFile, nextImg.Bounds().Max.X, nextImg.Bounds().Max.Y)
 
-	err = c.renderer.Transition(nextImg, time.Duration(viper.GetInt("fade_speed"))*time.Second)
+	err = c.renderer.Transition(nextImg, c.cfg.FadeDuration())
 	if err != nil {
 		log.Errorf("Failed to transition images: %v", err)
 	}
@@ -258,8 +329,5 @@ func (c *Manager) SetCurrent() {
 }
 
 func (c *Manager) EnqueueCommand(cmd Command) {
-	c.Lock()
-	defer c.Unlock()
-
 	c.cmds <- cmd
 }

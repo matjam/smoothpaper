@@ -1,16 +1,17 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/log"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
-	"github.com/matjam/smoothpaper/internal/cli/cmd/utils"
+	"github.com/matjam/smoothpaper/internal/config"
 	"github.com/matjam/smoothpaper/internal/ipc"
-	"github.com/spf13/viper"
+	"github.com/matjam/smoothpaper/internal/wallpapers"
 )
 
 func StartManager() {
@@ -25,68 +26,12 @@ func StartManager() {
 		os.Exit(0)
 	}
 
-	log.Info("Searching for images ...")
+	cfg, paths := LoadConfigAndWallpapers()
 
-	wallpaperPaths := make([]string, 0)
-	paths := make([]string, 0)
+	log.Infof("Shuffle: %v", cfg.Shuffle)
 
-	if !viper.IsSet("wallpapers") {
-		log.Fatal("No wallpapers directory specified. Please set the 'wallpapers' configuration.")
-	}
-
-	wallpapersConfig := viper.Get("wallpapers")
-
-	switch v := wallpapersConfig.(type) {
-	case string:
-		paths = append(paths, utils.CanonicalPath(v))
-	case []any:
-		for _, wallpaperEntry := range v {
-			wallpaper, ok := wallpaperEntry.(string)
-			if !ok {
-				log.Fatalf("Invalid type for wallpaper entry: %T", wallpaperEntry)
-			}
-			paths = append(paths, utils.CanonicalPath(wallpaper))
-		}
-	default:
-		log.Fatalf("Invalid type for wallpapers configuration: %T", v)
-	}
-
-	log.Infof("Wallpaper directories: %v", paths)
-
-	for _, path := range paths {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			log.Fatalf("Wallpaper directory does not exist: %s", path)
-		}
-
-		dirEntries, err := os.ReadDir(path)
-		if err != nil {
-			log.Fatalf("Error reading wallpapers directory: %v", err)
-		}
-
-		for _, entry := range dirEntries {
-			if entry.IsDir() {
-				continue
-			}
-			name := strings.ToLower(entry.Name())
-			if strings.HasSuffix(name, ".png") ||
-				strings.HasSuffix(name, ".jpg") ||
-				strings.HasSuffix(name, ".jpeg") ||
-				strings.HasSuffix(name, ".gif") {
-				wallpaperPaths = append(wallpaperPaths, filepath.Join(path, entry.Name()))
-			}
-		}
-	}
-
-	if len(wallpaperPaths) == 0 {
-		log.Fatal("No valid wallpapers found in the specified directories.")
-	}
-
-	log.Infof("Found %d wallpapers in %s", len(wallpaperPaths), viper.GetString("wallpapers"))
-	log.Infof("First wallpaper: %s", wallpaperPaths[0])
-	log.Infof("Shuffle: %v", viper.GetBool("shuffle"))
-
-	manager := ipc.NewManager(wallpaperPaths)
-	if viper.GetBool("shuffle") {
+	manager := ipc.NewManager(paths, cfg)
+	if cfg.Shuffle {
 		manager.Shuffle()
 	}
 
@@ -106,10 +51,64 @@ func StartManager() {
 	log.Infof("smoothpaper exited")
 }
 
+// LoadConfigAndWallpapers loads the config and scans the wallpaper directories.
+// It logs a warning for each invalid value, and it stops the program if the
+// scan fails. With -b, the parent also calls it before the fork, these
+// messages show in the terminal and not only in the log file
+func LoadConfigAndWallpapers() (*config.Config, []string) {
+	cfg, problems := config.LoadWithDefaults()
+	for _, err := range problems {
+		log.Warnf("Invalid config value, using default value: %v", err)
+	}
+
+	if cfg.Debug {
+		log.SetLevel(log.DebugLevel)
+	}
+
+	paths, err := wallpapers.ScanWallpapers(cfg.Directories)
+	if err != nil {
+		log.Fatalf("Failed to scan wallpapers: %v", err)
+	}
+	return cfg, paths
+}
+
+// How long the parent waits for the daemon to answer
+var startTimeout = 10 * time.Second
+
+// WaitForDaemon waits until the daemon answers on the socket. The daemon logs
+// its errors only to the log file, so the parent must find out if the daemon
+// stopped before it exits with code 0. After the timeout, it kills the child,
+// so an error always means that no daemon runs.
+func WaitForDaemon(child *os.Process) error {
+	exited := make(chan struct{})
+	go func() {
+		child.Wait()
+		close(exited)
+	}()
+
+	timeout := time.After(startTimeout)
+	for {
+		select {
+		case <-exited:
+			return errors.New("the daemon stopped during startup")
+		case <-timeout:
+			child.Kill()
+			<-exited
+			return fmt.Errorf("the daemon did not answer in %v, killed the process", startTimeout)
+		case <-time.After(100 * time.Millisecond):
+			if _, err := ipc.SendStatus(); err == nil {
+				return nil
+			}
+		}
+	}
+}
+
+func LogPath() string {
+	return filepath.Join(os.Getenv("HOME"), ".local", "share", "smoothpaper", "smoothpaper.log")
+}
+
 func setupRotatingLogger() {
-	home := os.Getenv("HOME")
-	logDir := filepath.Join(home, ".local", "share", "smoothpaper")
-	logPath := filepath.Join(logDir, "smoothpaper.log")
+	logPath := LogPath()
 
 	writer, err := rotatelogs.New(
 		logPath+".%Y%m%d%H%M",
